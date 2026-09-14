@@ -86,7 +86,8 @@ def tempo_em_segundos(col_tempo, serie_tempo):
 
 
 def detectar_pico_primeiro_movimento(tempo, valor, t_inicio=0.0, t_fim=None):
-    """Acha o instante do valor máximo do sinal dentro da janela [t_inicio, t_fim].
+    """Acha o instante de maior desvio (em módulo, positivo ou negativo)
+    em relação à mediana do sinal, dentro da janela [t_inicio, t_fim].
     Usado para localizar o pico de aceleração do primeiro movimento."""
     tempo = np.asarray(tempo, dtype=float)
     valor = np.asarray(valor, dtype=float)
@@ -95,9 +96,10 @@ def detectar_pico_primeiro_movimento(tempo, valor, t_inicio=0.0, t_fim=None):
     mask = (tempo >= t_inicio) & (tempo <= t_fim)
     if mask.sum() == 0:
         return None, None
-    idx_local = np.argmax(valor[mask])
     tempo_janela = tempo[mask]
     valor_janela = valor[mask]
+    baseline = np.median(valor_janela)
+    idx_local = np.argmax(np.abs(valor_janela - baseline))
     return float(tempo_janela[idx_local]), float(valor_janela[idx_local])
 
 
@@ -263,10 +265,15 @@ if "Kinem" in dataframes:
         opcoes_ref[f"Deslocamento — {preferido_desloc}"] = preferido_desloc
 
     if opcoes_ref:
+        indice_padrao = 0
+        for i, k in enumerate(opcoes_ref.keys()):
+            if k.startswith("Aceleração"):
+                indice_padrao = i
+                break
         escolha_ref = st.selectbox(
-            "Sinal do Kinem usado como referência (o deslocamento costuma ter um pico bem mais fácil de identificar)",
+            "Sinal do Kinem usado como referência",
             list(opcoes_ref.keys()),
-            index=list(opcoes_ref.keys()).index(next(k for k in opcoes_ref if k.startswith("Deslocamento"))) if any(k.startswith("Deslocamento") for k in opcoes_ref) else 0,
+            index=indice_padrao,
         )
         col_ref = opcoes_ref[escolha_ref]
         ref_tempo = tempo_seg_por_fonte["Kinem"].values
@@ -274,14 +281,7 @@ if "Kinem" in dataframes:
         ref_nome = col_ref
 
 if ref_tempo is not None:
-    st.caption(
-        f"Referência: Kinem — {ref_nome}. Atenção: se você escolher "
-        "Deslocamento como referência, lembre que o pico de aceleração "
-        "acontece um pouco antes do pico de deslocamento (fisicamente, a "
-        "aceleração 'empurra' o movimento) — pode haver uma pequena "
-        "defasagem de alguns décimos de segundo, geralmente pequena "
-        "perto da precisão que você precisa."
-    )
+    st.caption(f"Referência: Kinem — {ref_nome}")
 
     st.markdown("**Janela do primeiro movimento (em segundos, tempo original de cada arquivo)**")
     jc1, jc2, jc3 = st.columns(3)
@@ -313,14 +313,13 @@ if ref_tempo is not None:
                 fonte_acel = f"{grupo} - Acelerômetro"
                 if fonte_acel in dataframes:
                     df_acel = dataframes[fonte_acel]
-                    cols_xyz = [c for c in ["X", "Y", "Z"] if c in df_acel.columns]
-                    if len(cols_xyz) == 3:
-                        magnitude = np.sqrt((df_acel[cols_xyz] ** 2).sum(axis=1)).values
+                    if "Y" in df_acel.columns:
+                        sinal_celular = df_acel["Y"].values
                     else:
-                        magnitude = df_acel[df_acel.columns[-1]].values
+                        sinal_celular = df_acel[df_acel.columns[-1]].values
                     t_ini, t_fim = janelas[grupo]
                     t_pico_celular, v_pico_celular = detectar_pico_primeiro_movimento(
-                        tempo_seg_por_fonte[fonte_acel].values, magnitude, t_ini, t_fim
+                        tempo_seg_por_fonte[fonte_acel].values, sinal_celular, t_ini, t_fim
                     )
                     if t_pico_celular is None:
                         st.warning(f"{grupo}: não encontrei dados na janela informada.")
