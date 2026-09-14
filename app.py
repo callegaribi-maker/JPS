@@ -334,21 +334,18 @@ layout_kwargs = dict(
 
 if EIXO_DESLOC in eixos_usados:
     layout_kwargs["yaxis"] = dict(
-        title="Deslocamento vertical",
-        titlefont=dict(color=CORES[EIXO_DESLOC]),
+        title=dict(text="Deslocamento vertical", font=dict(color=CORES[EIXO_DESLOC])),
         tickfont=dict(color=CORES[EIXO_DESLOC]),
     )
 if EIXO_ACEL in eixos_usados:
     layout_kwargs["yaxis2"] = dict(
-        title="Aceleração",
-        titlefont=dict(color=CORES[EIXO_ACEL]),
+        title=dict(text="Aceleração", font=dict(color=CORES[EIXO_ACEL])),
         tickfont=dict(color=CORES[EIXO_ACEL]),
         overlaying="y", side="right",
     )
 if EIXO_GYRO in eixos_usados:
     layout_kwargs["yaxis3"] = dict(
-        title="Giroscópio",
-        titlefont=dict(color=CORES[EIXO_GYRO]),
+        title=dict(text="Giroscópio", font=dict(color=CORES[EIXO_GYRO])),
         tickfont=dict(color=CORES[EIXO_GYRO]),
         overlaying="y", side="right", position=0.94,
         anchor="free",
