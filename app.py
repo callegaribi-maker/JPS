@@ -7,24 +7,43 @@ st.set_page_config(page_title="Visualizador de Dados", layout="wide")
 
 st.title("📊 Visualizador de Dados — Kinem x Celulares")
 st.write(
-    "Envie 1 arquivo do **Kinem** e até 4 arquivos de **Celular** "
-    "(CSV ou TXT). Todos devem ter o tempo na primeira coluna. "
-    "Depois configure os 3 gráficos escolhendo quais colunas entram em cada um."
+    "Arraste os **5 arquivos de uma vez** (1 do Kinem + 4 dos celulares: "
+    "Braço-Acel, Braço-Gyro, Punho-Acel, Punho-Gyro). O app identifica "
+    "cada um automaticamente pelo nome do arquivo."
 )
 
-# Delimitadores comuns para escolha manual (útil principalmente para .txt)
-DELIMITADORES = {
-    "Detectar automaticamente": None,
-    "Vírgula ( , )": ",",
-    "Ponto e vírgula ( ; )": ";",
-    "Tabulação ( \\t )": "\t",
-    "Pipe ( | )": "|",
-    "Espaço": r"\s+",
-}
+CATEGORIAS = [
+    "Kinem",
+    "Braço - Acelerômetro",
+    "Braço - Giroscópio",
+    "Punho - Acelerômetro",
+    "Punho - Giroscópio",
+    "Outro",
+]
 
 
-def ler_arquivo(uploaded_file, delimitador):
-    """Lê um arquivo CSV/TXT enviado e retorna um DataFrame."""
+def classificar_arquivo(nome_arquivo):
+    """Tenta identificar a categoria do arquivo pelo nome."""
+    n = nome_arquivo.lower()
+    if "kinem" in n:
+        return "Kinem"
+    eh_braco = ("braç" in n) or ("brac" in n)
+    eh_punho = "punho" in n
+    eh_acel = "acel" in n
+    eh_gyro = ("gyro" in n) or ("giro" in n)
+    if eh_braco and eh_acel:
+        return "Braço - Acelerômetro"
+    if eh_braco and eh_gyro:
+        return "Braço - Giroscópio"
+    if eh_punho and eh_acel:
+        return "Punho - Acelerômetro"
+    if eh_punho and eh_gyro:
+        return "Punho - Giroscópio"
+    return "Outro"
+
+
+def ler_arquivo(uploaded_file):
+    """Lê um arquivo CSV/TXT (detecta encoding e delimitador automaticamente)."""
     conteudo = uploaded_file.getvalue()
 
     texto = None
@@ -37,70 +56,58 @@ def ler_arquivo(uploaded_file, delimitador):
     if texto is None:
         raise ValueError("Não foi possível decodificar o arquivo (encoding).")
 
-    if delimitador is None:
-        df = pd.read_csv(io.StringIO(texto), sep=None, engine="python")
-    else:
-        df = pd.read_csv(io.StringIO(texto), sep=delimitador, engine="python")
-
+    df = pd.read_csv(io.StringIO(texto), sep=None, engine="python")
     return df
 
 
-def palpite_padrao(nome_arquivo, nome_coluna):
-    """Sugere em qual gráfico (1, 2 ou 3) uma coluna provavelmente se encaixa,
-    com base em palavras-chave comuns. Retorna None se não tiver palpite."""
-    col = nome_coluna.lower()
-    arq = nome_arquivo.lower()
-
-    if "desloc" in col:
-        return 1
-    if ("acele" in col or "acc" in col or "aceler" in col) and "vertical" in col:
-        return 2
-    if "acele" in col or "acc" in col:
-        if "y" in col:
-            return 2
-    if "girosc" in col or "gyro" in col:
-        if "y" in col:
-            return 3
-    return None
+def eh_coluna_posicao_y(col):
+    """Coluna de posição vertical (ex: 'Medial do punho dir. Y'), não velocidade/aceleração."""
+    c = col.strip()
+    return c.endswith("Y") and not c.endswith(")")
 
 
-# --- Definição das fontes de arquivo: 1 Kinem + 4 Celular ---
-FONTES = ["Kinem"] + [f"Celular {i}" for i in range(1, 5)]
+def eh_coluna_acel_y(col):
+    """Coluna de aceleração vertical no Kinem (ex: '... a(Y)')."""
+    return col.strip().endswith("a(Y)")
 
+
+# --- Upload único, com múltiplos arquivos de uma vez ---
 st.sidebar.header("⚙️ Arquivos")
+arquivos_enviados = st.sidebar.file_uploader(
+    "Envie os 5 arquivos juntos (Kinem + 4 celulares)",
+    type=["csv", "txt"],
+    accept_multiple_files=True,
+)
 
-uploads = {}
-for fonte in FONTES:
-    st.sidebar.markdown(f"**{fonte}**")
-    up = st.sidebar.file_uploader(
-        f"Arquivo do {fonte}",
-        type=["csv", "txt"],
-        key=f"upload_{fonte}",
-    )
-    delim_label = st.sidebar.selectbox(
-        "Delimitador",
-        list(DELIMITADORES.keys()),
-        key=f"delim_{fonte}",
-        label_visibility="collapsed",
-    )
-    uploads[fonte] = (up, DELIMITADORES[delim_label])
-    st.sidebar.divider()
+if not arquivos_enviados:
+    st.info("Envie os arquivos na barra lateral para começar.")
+    st.stop()
 
-# --- Processa os arquivos enviados ---
+# --- Classificação automática (com opção de corrigir manualmente) ---
+st.sidebar.subheader("Classificação detectada")
+classificacoes = {}
+for arq in arquivos_enviados:
+    sugestao = classificar_arquivo(arq.name)
+    escolha = st.sidebar.selectbox(
+        arq.name,
+        CATEGORIAS,
+        index=CATEGORIAS.index(sugestao),
+        key=f"cat_{arq.name}",
+    )
+    classificacoes[arq.name] = escolha
+
+# --- Leitura dos arquivos ---
 dataframes = {}
 erros = {}
-
-for fonte, (up, delim) in uploads.items():
-    if up is not None:
-        try:
-            df = ler_arquivo(up, delim)
-            dataframes[fonte] = df
-        except Exception as e:
-            erros[fonte] = str(e)
-
-if not dataframes and not erros:
-    st.info("Envie pelo menos um arquivo na barra lateral para começar.")
-    st.stop()
+for arq in arquivos_enviados:
+    categoria = classificacoes[arq.name]
+    try:
+        df = ler_arquivo(arq)
+        # Se houver mais de um arquivo com a mesma categoria, diferencia pelo nome
+        chave = categoria if categoria not in dataframes else f"{categoria} ({arq.name})"
+        dataframes[chave] = df
+    except Exception as e:
+        erros[arq.name] = str(e)
 
 if erros:
     for nome, msg in erros.items():
@@ -122,7 +129,7 @@ for aba, (nome, df) in zip(abas, dataframes.items()):
         st.download_button(
             "⬇️ Baixar como CSV",
             data=csv_bytes,
-            file_name=f"{nome.replace(' ', '_')}.csv",
+            file_name=f"{nome.replace(' ', '_').replace('(', '').replace(')', '')}.csv",
             mime="text/csv",
             key=f"download_{nome}",
         )
@@ -130,56 +137,70 @@ for aba, (nome, df) in zip(abas, dataframes.items()):
 # --- Configuração e montagem dos 3 gráficos ---
 st.header("📈 Gráficos")
 
-if len(dataframes) == 0:
-    st.stop()
+# Tempo = primeira coluna de cada arquivo (padrão fixo para este formato)
+tempo_por_fonte = {fonte: df.columns[0] for fonte, df in dataframes.items()}
 
-# Monta a lista de todas as combinações (arquivo, coluna) disponíveis,
-# assumindo que a primeira coluna de cada arquivo é o tempo.
-series_disponiveis = []  # lista de tuplas (rotulo, fonte, coluna_y)
-tempo_por_fonte = {}
-
+series_disponiveis = []  # (rotulo, fonte, coluna)
 for fonte, df in dataframes.items():
-    colunas = list(df.columns)
-    if len(colunas) < 2:
-        continue
-    col_tempo = st.selectbox(
-        f"Coluna de tempo — {fonte}",
-        colunas,
-        index=0,
-        key=f"tempo_{fonte}",
-    )
-    tempo_por_fonte[fonte] = col_tempo
-    for col in colunas:
+    col_tempo = tempo_por_fonte[fonte]
+    for col in df.columns:
         if col == col_tempo:
             continue
-        rotulo = f"{fonte} — {col}"
-        series_disponiveis.append((rotulo, fonte, col))
+        series_disponiveis.append((f"{fonte} — {col}", fonte, col))
 
 rotulos_disponiveis = [s[0] for s in series_disponiveis]
 mapa_series = {s[0]: (s[1], s[2]) for s in series_disponiveis}
 
-# Sugestões automáticas por gráfico
+with st.expander("⚙️ Configurações avançadas (coluna de tempo por arquivo)"):
+    for fonte, df in dataframes.items():
+        nova_col = st.selectbox(
+            f"Coluna de tempo — {fonte}",
+            list(df.columns),
+            index=list(df.columns).index(tempo_por_fonte[fonte]),
+            key=f"tempo_{fonte}",
+        )
+        tempo_por_fonte[fonte] = nova_col
+
+# --- Sugestões automáticas por gráfico ---
 sugestoes = {1: [], 2: [], 3: []}
 for rotulo, fonte, col in series_disponiveis:
-    palpite = palpite_padrao(fonte, col)
-    if palpite:
-        sugestoes[palpite].append(rotulo)
+    if fonte == "Kinem":
+        if eh_coluna_posicao_y(col) and "punho" in col.lower():
+            sugestoes[1].append(rotulo)
+        if eh_coluna_acel_y(col) and "punho" in col.lower():
+            sugestoes[2].append(rotulo)
+    elif "Acelerômetro" in fonte and col.strip() == "Y":
+        sugestoes[2].append(rotulo)
+    elif "Giroscópio" in fonte and col.strip() == "Y":
+        sugestoes[3].append(rotulo)
+
+# Se nenhuma coluna do Kinem com "punho" foi achada, pega a primeira disponível
+if not sugestoes[1]:
+    for rotulo, fonte, col in series_disponiveis:
+        if fonte == "Kinem" and eh_coluna_posicao_y(col):
+            sugestoes[1].append(rotulo)
+            break
+if not any("Kinem" in r for r in sugestoes[2]):
+    for rotulo, fonte, col in series_disponiveis:
+        if fonte == "Kinem" and eh_coluna_acel_y(col):
+            sugestoes[2].insert(0, rotulo)
+            break
 
 titulos_grafico = {
     1: "Gráfico 1 — Deslocamento vertical (Kinem)",
-    2: "Gráfico 2 — Aceleração vertical (Kinem) x Aceleração Y (celulares)",
-    3: "Gráfico 3 — Giroscópio Y (celulares)",
+    2: "Gráfico 2 — Aceleração vertical: Kinem x Celulares",
+    3: "Gráfico 3 — Giroscópio Y: Braço x Punho",
 }
 
-colgraf1, colgraf2, colgraf3 = st.columns(3)
-colunas_layout = [colgraf1, colgraf2, colgraf3]
+col1, col2, col3 = st.columns(3)
+colunas_layout = [col1, col2, col3]
 
 selecoes = {}
 for i, col_layout in zip([1, 2, 3], colunas_layout):
     with col_layout:
         st.subheader(titulos_grafico[i])
         selecoes[i] = st.multiselect(
-            "Selecione as séries",
+            "Séries",
             options=rotulos_disponiveis,
             default=sugestoes[i],
             key=f"select_grafico_{i}",
