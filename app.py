@@ -101,6 +101,39 @@ def detectar_pico_primeiro_movimento(tempo, valor, t_inicio=0.0, t_fim=None):
     return float(tempo_janela[idx_local]), float(valor_janela[idx_local])
 
 
+def sugerir_corte(df, col_tempo, n_mad=8.0, fracao_cauda=0.05):
+    """Sugere até que tempo usar os dados de um arquivo, detectando um
+    salto anômalo apenas na 'cauda' final (últimos `fracao_cauda` da
+    duração) — por exemplo, quando a câmera do Kinem para de rastrear no
+    fim da gravação. Não mexe em anomalias no meio do sinal (que podem
+    ser movimento real)."""
+    tempo = df[col_tempo].values.astype(float)
+    n = len(df)
+    inicio_cauda = int(n * (1 - fracao_cauda))
+    colunas_num = [c for c in df.columns if c != col_tempo and pd.api.types.is_numeric_dtype(df[c])]
+    if not colunas_num or inicio_cauda >= n:
+        return float(tempo.max())
+
+    scores = np.zeros(n)
+    for c in colunas_num:
+        v = df[c].values.astype(float)
+        mediana = np.median(v)
+        mad = np.median(np.abs(v - mediana)) * 1.4826
+        if mad == 0:
+            continue
+        z = np.abs(v - mediana) / mad
+        scores = np.maximum(scores, z)
+
+    scores_cauda = scores[inicio_cauda:]
+    anomalos = np.where(scores_cauda > n_mad)[0]
+    if len(anomalos) == 0:
+        return float(tempo.max())
+    idx_primeiro_anomalo = inicio_cauda + anomalos[0]
+    margem = 2
+    idx_corte = max(0, idx_primeiro_anomalo - margem)
+    return float(tempo[idx_corte])
+
+
 # --- Upload único, com múltiplos arquivos de uma vez ---
 st.sidebar.header("⚙️ Arquivos")
 arquivos_enviados = st.sidebar.file_uploader(
@@ -159,11 +192,17 @@ cortes = {}
 for col_layout, fonte in zip(cortes_colunas, dataframes.keys()):
     with col_layout:
         duracao_total = float(tempo_seg_bruto[fonte].max())
+        sugestao_corte = min(
+            sugerir_corte(dataframes[fonte], tempo_col_bruto[fonte]),
+            duracao_total,
+        )
+        if sugestao_corte < duracao_total:
+            st.caption(f"⚠️ Artefato detectado — corte sugerido: {sugestao_corte:.2f}s")
         cortes[fonte] = st.number_input(
             f"{fonte}: usar até (s)",
             min_value=0.0,
             max_value=duracao_total,
-            value=duracao_total,
+            value=sugestao_corte,
             step=0.5,
             key=f"corte_{fonte}",
         )
@@ -203,7 +242,11 @@ st.write(
 )
 
 if "offsets" not in st.session_state:
-    st.session_state.offsets = {"Braço": 0.0, "Punho": 0.0}
+    st.session_state.offsets = {}
+if "braco_offset" not in st.session_state:
+    st.session_state.braco_offset = 0.0
+if "punho_offset" not in st.session_state:
+    st.session_state.punho_offset = 0.0
 
 ref_tempo, ref_valor, ref_nome = None, None, None
 if "Kinem" in dataframes:
@@ -282,25 +325,49 @@ if ref_tempo is not None:
                         st.warning(f"{grupo}: não encontrei dados na janela informada.")
                         continue
                     offset = t_pico_kinem - t_pico_celular
-                    st.session_state.offsets[grupo] = offset
+                    if grupo == "Braço":
+                        st.session_state.braco_offset = offset
+                    else:
+                        st.session_state.punho_offset = offset
                     st.success(
                         f"{grupo}: pico em t = {t_pico_celular:.2f} s (valor {v_pico_celular:.2f}) "
                         f"→ deslocamento aplicado = {offset:.2f} s"
                     )
 
+st.markdown("**Ajuste fino (use os botões olhando o gráfico combinado, mais abaixo)**")
 col_a, col_b = st.columns(2)
-st.session_state.offsets["Braço"] = col_a.number_input(
-    "Deslocamento — Braço (s)",
-    value=float(st.session_state.offsets["Braço"]),
-    step=0.05, format="%.2f",
-)
-st.session_state.offsets["Punho"] = col_b.number_input(
-    "Deslocamento — Punho (s)",
-    value=float(st.session_state.offsets["Punho"]),
-    step=0.05, format="%.2f",
-)
+with col_a:
+    st.caption(f"Braço — deslocamento atual: {st.session_state.braco_offset:.2f} s")
+    nb1, nb2, nb3, nb4 = st.columns(4)
+    if nb1.button("◀◀ -1s", key="braco_m1"):
+        st.session_state.braco_offset -= 1.0
+    if nb2.button("◀ -0.1s", key="braco_m01"):
+        st.session_state.braco_offset -= 0.1
+    if nb3.button("+0.1s ▶", key="braco_p01"):
+        st.session_state.braco_offset += 0.1
+    if nb4.button("+1s ▶▶", key="braco_p1"):
+        st.session_state.braco_offset += 1.0
+    st.number_input(
+        "Ajuste fino — Braço (s)",
+        step=0.05, format="%.2f", key="braco_offset",
+    )
+with col_b:
+    st.caption(f"Punho — deslocamento atual: {st.session_state.punho_offset:.2f} s")
+    npb1, npb2, npb3, npb4 = st.columns(4)
+    if npb1.button("◀◀ -1s", key="punho_m1"):
+        st.session_state.punho_offset -= 1.0
+    if npb2.button("◀ -0.1s", key="punho_m01"):
+        st.session_state.punho_offset -= 0.1
+    if npb3.button("+0.1s ▶", key="punho_p01"):
+        st.session_state.punho_offset += 0.1
+    if npb4.button("+1s ▶▶", key="punho_p1"):
+        st.session_state.punho_offset += 1.0
+    st.number_input(
+        "Ajuste fino — Punho (s)",
+        step=0.05, format="%.2f", key="punho_offset",
+    )
 
-offsets = st.session_state.offsets
+offsets = {"Braço": st.session_state.braco_offset, "Punho": st.session_state.punho_offset}
 
 
 def tempo_ajustado(fonte):
