@@ -140,6 +140,38 @@ if erros:
     for nome, msg in erros.items():
         st.error(f"Erro ao ler **{nome}**: {msg}")
 
+# --- Corte de artefatos no final dos arquivos (ex: quando a câmera do Kinem para) ---
+st.header("✂️ Cortar dados no final (remover artefatos)")
+st.write(
+    "Se algum arquivo tiver um pico estranho no final (ex: quando a "
+    "câmera do Kinem para de rastrear), defina até que segundo usar os "
+    "dados daquele arquivo — o restante é descartado."
+)
+
+tempo_col_bruto = {fonte: df.columns[0] for fonte, df in dataframes.items()}
+tempo_seg_bruto = {
+    fonte: tempo_em_segundos(tempo_col_bruto[fonte], dataframes[fonte][tempo_col_bruto[fonte]])
+    for fonte in dataframes
+}
+
+cortes_colunas = st.columns(len(dataframes)) if dataframes else []
+cortes = {}
+for col_layout, fonte in zip(cortes_colunas, dataframes.keys()):
+    with col_layout:
+        duracao_total = float(tempo_seg_bruto[fonte].max())
+        cortes[fonte] = st.number_input(
+            f"{fonte}: usar até (s)",
+            min_value=0.0,
+            max_value=duracao_total,
+            value=duracao_total,
+            step=0.5,
+            key=f"corte_{fonte}",
+        )
+
+for fonte in list(dataframes.keys()):
+    mask_corte = tempo_seg_bruto[fonte] <= cortes[fonte]
+    dataframes[fonte] = dataframes[fonte][mask_corte].reset_index(drop=True)
+
 with st.expander("📄 Ver dados brutos (opcional)"):
     abas = st.tabs(list(dataframes.keys()))
     for aba, (nome, df) in zip(abas, dataframes.items()):
@@ -176,16 +208,37 @@ if "offsets" not in st.session_state:
 ref_tempo, ref_valor, ref_nome = None, None, None
 if "Kinem" in dataframes:
     df_kinem = dataframes["Kinem"]
-    candidatos = [c for c in df_kinem.columns if eh_coluna_acel_abs(c)]
-    preferida = next((c for c in candidatos if "punho" in c.lower()), None)
-    col_ref = preferida or (candidatos[0] if candidatos else None)
-    if col_ref:
+    opcoes_ref = {}
+    candidatos_acel = [c for c in df_kinem.columns if eh_coluna_acel_abs(c)]
+    preferido_acel = next((c for c in candidatos_acel if "punho" in c.lower()), None) or (candidatos_acel[0] if candidatos_acel else None)
+    if preferido_acel:
+        opcoes_ref[f"Aceleração — {preferido_acel}"] = preferido_acel
+
+    candidatos_desloc = [c for c in df_kinem.columns if eh_coluna_posicao_y(c)]
+    preferido_desloc = next((c for c in candidatos_desloc if "punho" in c.lower()), None) or (candidatos_desloc[0] if candidatos_desloc else None)
+    if preferido_desloc:
+        opcoes_ref[f"Deslocamento — {preferido_desloc}"] = preferido_desloc
+
+    if opcoes_ref:
+        escolha_ref = st.selectbox(
+            "Sinal do Kinem usado como referência (o deslocamento costuma ter um pico bem mais fácil de identificar)",
+            list(opcoes_ref.keys()),
+            index=list(opcoes_ref.keys()).index(next(k for k in opcoes_ref if k.startswith("Deslocamento"))) if any(k.startswith("Deslocamento") for k in opcoes_ref) else 0,
+        )
+        col_ref = opcoes_ref[escolha_ref]
         ref_tempo = tempo_seg_por_fonte["Kinem"].values
         ref_valor = df_kinem[col_ref].values
         ref_nome = col_ref
 
 if ref_tempo is not None:
-    st.caption(f"Referência: Kinem — {ref_nome}")
+    st.caption(
+        f"Referência: Kinem — {ref_nome}. Atenção: se você escolher "
+        "Deslocamento como referência, lembre que o pico de aceleração "
+        "acontece um pouco antes do pico de deslocamento (fisicamente, a "
+        "aceleração 'empurra' o movimento) — pode haver uma pequena "
+        "defasagem de alguns décimos de segundo, geralmente pequena "
+        "perto da precisão que você precisa."
+    )
 
     st.markdown("**Janela do primeiro movimento (em segundos, tempo original de cada arquivo)**")
     jc1, jc2, jc3 = st.columns(3)
