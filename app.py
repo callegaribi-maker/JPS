@@ -334,39 +334,10 @@ if ref_tempo is not None:
                         f"→ deslocamento aplicado = {offset:.2f} s"
                     )
 
-st.markdown("**Ajuste fino (use os botões olhando o gráfico combinado, mais abaixo)**")
-col_a, col_b = st.columns(2)
-with col_a:
-    st.caption(f"Braço — deslocamento atual: {st.session_state.braco_offset:.2f} s")
-    nb1, nb2, nb3, nb4 = st.columns(4)
-    if nb1.button("◀◀ -1s", key="braco_m1"):
-        st.session_state.braco_offset -= 1.0
-    if nb2.button("◀ -0.1s", key="braco_m01"):
-        st.session_state.braco_offset -= 0.1
-    if nb3.button("+0.1s ▶", key="braco_p01"):
-        st.session_state.braco_offset += 0.1
-    if nb4.button("+1s ▶▶", key="braco_p1"):
-        st.session_state.braco_offset += 1.0
-    st.number_input(
-        "Ajuste fino — Braço (s)",
-        step=0.05, format="%.2f", key="braco_offset",
-    )
-with col_b:
-    st.caption(f"Punho — deslocamento atual: {st.session_state.punho_offset:.2f} s")
-    npb1, npb2, npb3, npb4 = st.columns(4)
-    if npb1.button("◀◀ -1s", key="punho_m1"):
-        st.session_state.punho_offset -= 1.0
-    if npb2.button("◀ -0.1s", key="punho_m01"):
-        st.session_state.punho_offset -= 0.1
-    if npb3.button("+0.1s ▶", key="punho_p01"):
-        st.session_state.punho_offset += 0.1
-    if npb4.button("+1s ▶▶", key="punho_p1"):
-        st.session_state.punho_offset += 1.0
-    st.number_input(
-        "Ajuste fino — Punho (s)",
-        step=0.05, format="%.2f", key="punho_offset",
-    )
-
+st.markdown(
+    f"**Deslocamento aplicado** — Braço: `{st.session_state.braco_offset:.2f}s` · "
+    f"Punho: `{st.session_state.punho_offset:.2f}s`"
+)
 offsets = {"Braço": st.session_state.braco_offset, "Punho": st.session_state.punho_offset}
 
 
