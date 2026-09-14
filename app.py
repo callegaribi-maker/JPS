@@ -176,38 +176,37 @@ if erros:
         st.error(f"Erro ao ler **{nome}**: {msg}")
 
 # --- Corte de artefatos no final dos arquivos (ex: quando a câmera do Kinem para) ---
-st.header("✂️ Cortar dados no final (remover artefatos)")
-st.write(
-    "Se algum arquivo tiver um pico estranho no final (ex: quando a "
-    "câmera do Kinem para de rastrear), defina até que segundo usar os "
-    "dados daquele arquivo — o restante é descartado."
-)
-
 tempo_col_bruto = {fonte: df.columns[0] for fonte, df in dataframes.items()}
 tempo_seg_bruto = {
     fonte: tempo_em_segundos(tempo_col_bruto[fonte], dataframes[fonte][tempo_col_bruto[fonte]])
     for fonte in dataframes
 }
 
-cortes_colunas = st.columns(len(dataframes)) if dataframes else []
-cortes = {}
-for col_layout, fonte in zip(cortes_colunas, dataframes.keys()):
-    with col_layout:
-        duracao_total = float(tempo_seg_bruto[fonte].max())
-        sugestao_corte = min(
-            sugerir_corte(dataframes[fonte], tempo_col_bruto[fonte]),
-            duracao_total,
-        )
-        if sugestao_corte < duracao_total:
-            st.caption(f"⚠️ Artefato detectado — corte sugerido: {sugestao_corte:.2f}s")
-        cortes[fonte] = st.number_input(
-            f"{fonte}: usar até (s)",
-            min_value=0.0,
-            max_value=duracao_total,
-            value=sugestao_corte,
-            step=0.5,
-            key=f"corte_{fonte}",
-        )
+with st.expander("✂️ Cortar dados no final (remover artefatos)"):
+    st.write(
+        "Se algum arquivo tiver um pico estranho no final (ex: quando a "
+        "câmera do Kinem para de rastrear), defina até que segundo usar "
+        "os dados daquele arquivo — o restante é descartado."
+    )
+    cortes_colunas = st.columns(len(dataframes)) if dataframes else []
+    cortes = {}
+    for col_layout, fonte in zip(cortes_colunas, dataframes.keys()):
+        with col_layout:
+            duracao_total = float(tempo_seg_bruto[fonte].max())
+            sugestao_corte = min(
+                sugerir_corte(dataframes[fonte], tempo_col_bruto[fonte]),
+                duracao_total,
+            )
+            if sugestao_corte < duracao_total:
+                st.caption(f"⚠️ Artefato detectado — corte sugerido: {sugestao_corte:.2f}s")
+            cortes[fonte] = st.number_input(
+                f"{fonte}: usar até (s)",
+                min_value=0.0,
+                max_value=duracao_total,
+                value=sugestao_corte,
+                step=0.5,
+                key=f"corte_{fonte}",
+            )
 
 for fonte in list(dataframes.keys()):
     mask_corte = tempo_seg_bruto[fonte] <= cortes[fonte]
@@ -237,14 +236,11 @@ tempo_seg_por_fonte = {
 st.header("🔄 Sincronização temporal")
 st.write(
     "O Kinem e cada celular começam a gravar em momentos diferentes. "
-    "A sincronização é feita pelo **pico de aceleração do primeiro "
-    "movimento** — informe em que janela de tempo esse primeiro "
-    "movimento aparece em cada arquivo (olhando o gráfico combinado "
-    "logo abaixo) e o app alinha os relógios por esse pico."
+    "A sincronização é feita automaticamente pelo **pico de aceleração "
+    "do primeiro movimento**, usando a aceleração do Kinem no punho "
+    "como referência fixa."
 )
 
-if "offsets" not in st.session_state:
-    st.session_state.offsets = {}
 if "braco_offset" not in st.session_state:
     st.session_state.braco_offset = 0.0
 if "punho_offset" not in st.session_state:
@@ -253,29 +249,9 @@ if "punho_offset" not in st.session_state:
 ref_tempo, ref_valor, ref_nome = None, None, None
 if "Kinem" in dataframes:
     df_kinem = dataframes["Kinem"]
-    opcoes_ref = {}
     candidatos_acel = [c for c in df_kinem.columns if eh_coluna_acel_abs(c)]
-    preferido_acel = next((c for c in candidatos_acel if "punho" in c.lower()), None) or (candidatos_acel[0] if candidatos_acel else None)
-    if preferido_acel:
-        opcoes_ref[f"Aceleração — {preferido_acel}"] = preferido_acel
-
-    candidatos_desloc = [c for c in df_kinem.columns if eh_coluna_posicao_y(c)]
-    preferido_desloc = next((c for c in candidatos_desloc if "punho" in c.lower()), None) or (candidatos_desloc[0] if candidatos_desloc else None)
-    if preferido_desloc:
-        opcoes_ref[f"Deslocamento — {preferido_desloc}"] = preferido_desloc
-
-    if opcoes_ref:
-        indice_padrao = 0
-        for i, k in enumerate(opcoes_ref.keys()):
-            if k.startswith("Aceleração"):
-                indice_padrao = i
-                break
-        escolha_ref = st.selectbox(
-            "Sinal do Kinem usado como referência",
-            list(opcoes_ref.keys()),
-            index=indice_padrao,
-        )
-        col_ref = opcoes_ref[escolha_ref]
+    col_ref = next((c for c in candidatos_acel if "punho" in c.lower()), None) or (candidatos_acel[0] if candidatos_acel else None)
+    if col_ref:
         ref_tempo = tempo_seg_por_fonte["Kinem"].values
         ref_valor = df_kinem[col_ref].values
         ref_nome = col_ref
@@ -283,26 +259,11 @@ if "Kinem" in dataframes:
 if ref_tempo is not None:
     st.caption(f"Referência: Kinem — {ref_nome}")
 
-    st.markdown("**Janela do primeiro movimento (em segundos, tempo original de cada arquivo)**")
-    jc1, jc2, jc3 = st.columns(3)
-    with jc1:
-        st.caption("Kinem")
-        kinem_ini = st.number_input("Início (Kinem)", value=0.0, step=0.5, key="kinem_ini")
-        kinem_fim = st.number_input("Fim (Kinem)", value=15.0, step=0.5, key="kinem_fim")
-    with jc2:
-        st.caption("Braço (celular)")
-        braco_ini = st.number_input("Início (Braço)", value=0.0, step=0.5, key="braco_ini")
-        braco_fim = st.number_input("Fim (Braço)", value=15.0, step=0.5, key="braco_fim")
-    with jc3:
-        st.caption("Punho (celular)")
-        punho_ini = st.number_input("Início (Punho)", value=0.0, step=0.5, key="punho_ini")
-        punho_fim = st.number_input("Fim (Punho)", value=15.0, step=0.5, key="punho_fim")
-
-    janelas = {"Braço": (braco_ini, braco_fim), "Punho": (punho_ini, punho_fim)}
+    JANELA_PADRAO = 15.0  # segundos, aplicada internamente para achar o 1º pico
 
     if st.button("🎯 Sincronizar pelo pico do primeiro movimento"):
         t_pico_kinem, v_pico_kinem = detectar_pico_primeiro_movimento(
-            ref_tempo, ref_valor, kinem_ini, kinem_fim
+            ref_tempo, ref_valor, 0.0, JANELA_PADRAO
         )
         if t_pico_kinem is None:
             st.warning("Não encontrei dados do Kinem na janela informada.")
@@ -317,9 +278,8 @@ if ref_tempo is not None:
                         sinal_celular = df_acel["Y"].values
                     else:
                         sinal_celular = df_acel[df_acel.columns[-1]].values
-                    t_ini, t_fim = janelas[grupo]
                     t_pico_celular, v_pico_celular = detectar_pico_primeiro_movimento(
-                        tempo_seg_por_fonte[fonte_acel].values, sinal_celular, t_ini, t_fim
+                        tempo_seg_por_fonte[fonte_acel].values, sinal_celular, 0.0, JANELA_PADRAO
                     )
                     if t_pico_celular is None:
                         st.warning(f"{grupo}: não encontrei dados na janela informada.")
