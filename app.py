@@ -136,6 +136,30 @@ def sugerir_corte(df, col_tempo, n_mad=8.0, fracao_cauda=0.05):
     return float(tempo[idx_corte])
 
 
+def calcular_angulo_segmento(df, marcador_a, marcador_b, eixo_vertical="Y"):
+    """Calcula o ângulo (em graus) do segmento entre dois marcadores do
+    Kinem em relação à vertical, a partir das colunas X/Y/Z de cada um.
+    Esse ângulo reflete a postura mantida (não só o instante do
+    movimento), de forma parecida com o que o acelerômetro do celular
+    capta pela reorientação em relação à gravidade."""
+    cols_a = [f"{marcador_a} X", f"{marcador_a} Y", f"{marcador_a} Z"]
+    cols_b = [f"{marcador_b} X", f"{marcador_b} Y", f"{marcador_b} Z"]
+    if not all(c in df.columns for c in cols_a + cols_b):
+        return None
+    p_a = df[cols_a].values
+    p_b = df[cols_b].values
+    vetor = p_b - p_a
+    norma = np.linalg.norm(vetor, axis=1, keepdims=True)
+    norma[norma == 0] = np.nan
+    vetor_unit = vetor / norma
+    idx_vertical = {"X": 0, "Y": 1, "Z": 2}[eixo_vertical]
+    vertical = np.zeros(3)
+    vertical[idx_vertical] = 1.0
+    cos_angulo = vetor_unit @ vertical
+    angulo = np.degrees(np.arccos(np.clip(cos_angulo, -1, 1)))
+    return angulo
+
+
 # --- Upload único, com múltiplos arquivos de uma vez ---
 st.sidebar.header("⚙️ Arquivos")
 arquivos_enviados = st.sidebar.file_uploader(
@@ -174,6 +198,15 @@ for arq in arquivos_enviados:
 if erros:
     for nome, msg in erros.items():
         st.error(f"Erro ao ler **{nome}**: {msg}")
+
+# Adiciona ao Kinem uma coluna calculada: ângulo do antebraço em relação
+# à vertical (postura mantida), comparável ao "degrau" do acelerômetro.
+if "Kinem" in dataframes:
+    angulo = calcular_angulo_segmento(
+        dataframes["Kinem"], "Epicôndilo lateral dir.", "Medial do punho dir."
+    )
+    if angulo is not None:
+        dataframes["Kinem"]["Ângulo antebraço (vertical)"] = angulo
 
 # --- Corte de artefatos no final dos arquivos (ex: quando a câmera do Kinem para) ---
 tempo_col_bruto = {fonte: df.columns[0] for fonte, df in dataframes.items()}
@@ -322,10 +355,12 @@ rotulos_disponiveis = [s[0] for s in series_disponiveis]
 mapa_series = {s[0]: (s[1], s[2]) for s in series_disponiveis}
 
 # Define, para cada série, a que eixo ela pertence por padrão
-EIXO_DESLOC, EIXO_ACEL, EIXO_GYRO = "y1", "y2", "y3"
+EIXO_DESLOC, EIXO_ACEL, EIXO_GYRO, EIXO_ANGULO = "y1", "y2", "y3", "y4"
 
 def eixo_padrao(fonte, col):
     if fonte == "Kinem":
+        if "Ângulo" in col:
+            return EIXO_ANGULO
         if eh_coluna_posicao_y(col):
             return EIXO_DESLOC
         if eh_coluna_acel_y(col):
@@ -338,7 +373,7 @@ def eixo_padrao(fonte, col):
 
 sugestao_default = []
 for rotulo, fonte, col in series_disponiveis:
-    if fonte == "Kinem" and eh_coluna_acel_y(col) and "punho" in col.lower():
+    if fonte == "Kinem" and "Ângulo" in col:
         sugestao_default.append(rotulo)
     elif "Acelerômetro" in fonte and col.strip() == "Y":
         sugestao_default.append(rotulo)
@@ -369,6 +404,7 @@ CORES = {
     EIXO_DESLOC: "#1f77b4",
     EIXO_ACEL: "#d62728",
     EIXO_GYRO: "#2ca02c",
+    EIXO_ANGULO: "#9467bd",
 }
 
 fig = go.Figure()
@@ -388,7 +424,7 @@ for rotulo in selecionadas:
 
 layout_kwargs = dict(
     height=600,
-    xaxis=dict(title="Tempo (s, sincronizado)", domain=[0.0, 1.0]),
+    xaxis=dict(title="Tempo (s, sincronizado)", domain=[0.0, 0.85]),
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
 )
 
@@ -414,6 +450,13 @@ if EIXO_GYRO in eixos_usados:
         title=dict(text="Giroscópio", font=dict(color=CORES[EIXO_GYRO])),
         tickfont=dict(color=CORES[EIXO_GYRO]),
         overlaying="y", side="right", position=0.94,
+        anchor="free",
+    )
+if EIXO_ANGULO in eixos_usados:
+    layout_kwargs["yaxis4"] = dict(
+        title=dict(text="Ângulo (°)", font=dict(color=CORES[EIXO_ANGULO])),
+        tickfont=dict(color=CORES[EIXO_ANGULO]),
+        overlaying="y", side="right", position=0.88,
         anchor="free",
     )
 
