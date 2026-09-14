@@ -307,6 +307,7 @@ if ref_tempo is not None:
         if t_pico_kinem is None:
             st.warning("Não encontrei dados do Kinem na janela informada.")
         else:
+            st.session_state.pico_referencia = t_pico_kinem
             st.info(f"Pico do Kinem em t = {t_pico_kinem:.2f} s (valor {v_pico_kinem:.2f})")
             for grupo in ["Braço", "Punho"]:
                 fonte_acel = f"{grupo} - Acelerômetro"
@@ -432,6 +433,13 @@ if not selecionadas:
     st.info("Selecione ao menos uma série para plotar.")
     st.stop()
 
+zoom_no_pico = False
+if "pico_referencia" in st.session_state:
+    zoom_no_pico = st.checkbox(
+        f"🔍 Dar zoom perto do pico de referência (t = {st.session_state.pico_referencia:.2f} s)",
+        value=True,
+    )
+
 CORES = {
     EIXO_DESLOC: "#1f77b4",
     EIXO_ACEL: "#d62728",
@@ -459,6 +467,10 @@ layout_kwargs = dict(
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
 )
 
+if zoom_no_pico and "pico_referencia" in st.session_state:
+    t_ref = st.session_state.pico_referencia
+    layout_kwargs["xaxis"]["range"] = [t_ref - 5, t_ref + 5]
+
 if EIXO_DESLOC in eixos_usados:
     layout_kwargs["yaxis"] = dict(
         title=dict(text="Deslocamento vertical", font=dict(color=CORES[EIXO_DESLOC])),
@@ -479,4 +491,14 @@ if EIXO_GYRO in eixos_usados:
     )
 
 fig.update_layout(**layout_kwargs)
+
+if "pico_referencia" in st.session_state:
+    fig.add_vline(
+        x=st.session_state.pico_referencia,
+        line_dash="dash",
+        line_color="gray",
+        annotation_text="pico de referência",
+        annotation_position="top",
+    )
+
 st.plotly_chart(fig, use_container_width=True)
