@@ -85,40 +85,20 @@ def tempo_em_segundos(col_tempo, serie_tempo):
     return serie_tempo.astype(float)
 
 
-def detectar_offset(tempo_ref, valor_ref, tempo_alvo, valor_alvo, busca_max=90.0, dt=0.05, min_pontos=200):
-    """Sugestão inicial de deslocamento via correlação de Pearson entre a
-    magnitude da aceleração do celular e a aceleração do Kinem, numa grade
-    de tempo comum. Retorna (offset, correlação entre -1 e 1). Serve como
-    ponto de partida — como o movimento é repetitivo, confirme sempre
-    visualmente no gráfico."""
-    tempo_ref = np.asarray(tempo_ref, dtype=float)
-    valor_ref = np.asarray(valor_ref, dtype=float)
-    tempo_alvo = np.asarray(tempo_alvo, dtype=float)
-    valor_alvo = np.asarray(valor_alvo, dtype=float)
-
-    t0, t1 = tempo_ref.min(), tempo_ref.max()
-    grade = np.arange(t0, t1, dt)
-    if len(grade) < 10:
-        return 0.0, 0.0
-    ref_interp = np.interp(grade, tempo_ref, valor_ref)
-
-    melhor_offset, melhor_corr = 0.0, -np.inf
-    for offset in np.arange(-busca_max, busca_max, dt):
-        alvo_interp = np.interp(
-            grade, tempo_alvo + offset, valor_alvo,
-            left=np.nan, right=np.nan,
-        )
-        mask = ~np.isnan(alvo_interp)
-        if mask.sum() < min_pontos:
-            continue
-        r_sub = ref_interp[mask]
-        a_sub = alvo_interp[mask]
-        if np.std(r_sub) == 0 or np.std(a_sub) == 0:
-            continue
-        corr = np.corrcoef(r_sub, a_sub)[0, 1]
-        if corr > melhor_corr:
-            melhor_corr, melhor_offset = corr, offset
-    return float(melhor_offset), float(melhor_corr)
+def detectar_pico_primeiro_movimento(tempo, valor, t_inicio=0.0, t_fim=None):
+    """Acha o instante do valor máximo do sinal dentro da janela [t_inicio, t_fim].
+    Usado para localizar o pico de aceleração do primeiro movimento."""
+    tempo = np.asarray(tempo, dtype=float)
+    valor = np.asarray(valor, dtype=float)
+    if t_fim is None:
+        t_fim = tempo.max()
+    mask = (tempo >= t_inicio) & (tempo <= t_fim)
+    if mask.sum() == 0:
+        return None, None
+    idx_local = np.argmax(valor[mask])
+    tempo_janela = tempo[mask]
+    valor_janela = valor[mask]
+    return float(tempo_janela[idx_local]), float(valor_janela[idx_local])
 
 
 # --- Upload único, com múltiplos arquivos de uma vez ---
@@ -184,8 +164,10 @@ tempo_seg_por_fonte = {
 st.header("🔄 Sincronização temporal")
 st.write(
     "O Kinem e cada celular começam a gravar em momentos diferentes. "
-    "Ajuste o deslocamento (em segundos) de cada dispositivo até os "
-    "picos coincidirem no gráfico abaixo."
+    "A sincronização é feita pelo **pico de aceleração do primeiro "
+    "movimento** — informe em que janela de tempo esse primeiro "
+    "movimento aparece em cada arquivo (olhando o gráfico combinado "
+    "logo abaixo) e o app alinha os relógios por esse pico."
 )
 
 if "offsets" not in st.session_state:
@@ -203,30 +185,55 @@ if "Kinem" in dataframes:
         ref_nome = col_ref
 
 if ref_tempo is not None:
-    st.caption(
-        f"Referência: Kinem — {ref_nome}. A sugestão automática compara a "
-        "magnitude da aceleração (√(X²+Y²+Z²) do celular) — mas como o "
-        "movimento é repetitivo e os celulares têm ruído de manuseio no "
-        "início, use-a só como ponto de partida e confirme visualmente."
-    )
-    if st.button("🔍 Sugerir sincronização automaticamente"):
-        for grupo in ["Braço", "Punho"]:
-            fonte_acel = f"{grupo} - Acelerômetro"
-            if fonte_acel in dataframes:
-                df_acel = dataframes[fonte_acel]
-                cols_xyz = [c for c in ["X", "Y", "Z"] if c in df_acel.columns]
-                if len(cols_xyz) == 3:
-                    magnitude = np.sqrt((df_acel[cols_xyz] ** 2).sum(axis=1)).values
-                else:
-                    magnitude = df_acel[df_acel.columns[-1]].values
-                offset, corr = detectar_offset(
-                    ref_tempo, ref_valor,
-                    tempo_seg_por_fonte[fonte_acel].values,
-                    magnitude,
-                )
-                st.session_state.offsets[grupo] = offset
-                nivel = "boa" if corr > 0.5 else ("fraca" if corr > 0.25 else "muito fraca — ajuste manualmente")
-                st.success(f"{grupo}: deslocamento sugerido = {offset:.2f} s (correlação {corr:.2f} — confiança {nivel})")
+    st.caption(f"Referência: Kinem — {ref_nome}")
+
+    st.markdown("**Janela do primeiro movimento (em segundos, tempo original de cada arquivo)**")
+    jc1, jc2, jc3 = st.columns(3)
+    with jc1:
+        st.caption("Kinem")
+        kinem_ini = st.number_input("Início (Kinem)", value=0.0, step=0.5, key="kinem_ini")
+        kinem_fim = st.number_input("Fim (Kinem)", value=15.0, step=0.5, key="kinem_fim")
+    with jc2:
+        st.caption("Braço (celular)")
+        braco_ini = st.number_input("Início (Braço)", value=0.0, step=0.5, key="braco_ini")
+        braco_fim = st.number_input("Fim (Braço)", value=15.0, step=0.5, key="braco_fim")
+    with jc3:
+        st.caption("Punho (celular)")
+        punho_ini = st.number_input("Início (Punho)", value=0.0, step=0.5, key="punho_ini")
+        punho_fim = st.number_input("Fim (Punho)", value=15.0, step=0.5, key="punho_fim")
+
+    janelas = {"Braço": (braco_ini, braco_fim), "Punho": (punho_ini, punho_fim)}
+
+    if st.button("🎯 Sincronizar pelo pico do primeiro movimento"):
+        t_pico_kinem, v_pico_kinem = detectar_pico_primeiro_movimento(
+            ref_tempo, ref_valor, kinem_ini, kinem_fim
+        )
+        if t_pico_kinem is None:
+            st.warning("Não encontrei dados do Kinem na janela informada.")
+        else:
+            st.info(f"Pico do Kinem em t = {t_pico_kinem:.2f} s (valor {v_pico_kinem:.2f})")
+            for grupo in ["Braço", "Punho"]:
+                fonte_acel = f"{grupo} - Acelerômetro"
+                if fonte_acel in dataframes:
+                    df_acel = dataframes[fonte_acel]
+                    cols_xyz = [c for c in ["X", "Y", "Z"] if c in df_acel.columns]
+                    if len(cols_xyz) == 3:
+                        magnitude = np.sqrt((df_acel[cols_xyz] ** 2).sum(axis=1)).values
+                    else:
+                        magnitude = df_acel[df_acel.columns[-1]].values
+                    t_ini, t_fim = janelas[grupo]
+                    t_pico_celular, v_pico_celular = detectar_pico_primeiro_movimento(
+                        tempo_seg_por_fonte[fonte_acel].values, magnitude, t_ini, t_fim
+                    )
+                    if t_pico_celular is None:
+                        st.warning(f"{grupo}: não encontrei dados na janela informada.")
+                        continue
+                    offset = t_pico_kinem - t_pico_celular
+                    st.session_state.offsets[grupo] = offset
+                    st.success(
+                        f"{grupo}: pico em t = {t_pico_celular:.2f} s (valor {v_pico_celular:.2f}) "
+                        f"→ deslocamento aplicado = {offset:.2f} s"
+                    )
 
 col_a, col_b = st.columns(2)
 st.session_state.offsets["Braço"] = col_a.number_input(
