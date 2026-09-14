@@ -408,20 +408,10 @@ def eixo_padrao(fonte, col):
 
 sugestao_default = []
 for rotulo, fonte, col in series_disponiveis:
-    if fonte == "Kinem" and eh_coluna_posicao_y(col) and "punho" in col.lower():
-        sugestao_default.append(rotulo)
-    elif fonte == "Kinem" and eh_coluna_acel_y(col) and "punho" in col.lower():
+    if fonte == "Kinem" and eh_coluna_acel_y(col) and "punho" in col.lower():
         sugestao_default.append(rotulo)
     elif "Acelerômetro" in fonte and col.strip() == "Y":
         sugestao_default.append(rotulo)
-    elif "Giroscópio" in fonte and col.strip() == "Y":
-        sugestao_default.append(rotulo)
-
-if not any(eixo_padrao(*mapa_series[r]) == EIXO_DESLOC for r in sugestao_default):
-    for rotulo, fonte, col in series_disponiveis:
-        if fonte == "Kinem" and eh_coluna_posicao_y(col):
-            sugestao_default.append(rotulo)
-            break
 
 selecionadas = st.multiselect(
     "Séries no gráfico",
@@ -437,8 +427,13 @@ zoom_no_pico = False
 if "pico_referencia" in st.session_state:
     zoom_no_pico = st.checkbox(
         f"🔍 Dar zoom perto do pico de referência (t = {st.session_state.pico_referencia:.2f} s)",
-        value=True,
+        value=False,
     )
+
+st.markdown("**Janela de tempo mostrada no gráfico**")
+jw1, jw2 = st.columns(2)
+janela_ini = jw1.number_input("Ver de (s)", value=0.0, step=1.0, key="janela_ini")
+janela_fim = jw2.number_input("até (s)", value=20.0, step=1.0, key="janela_fim")
 
 CORES = {
     EIXO_DESLOC: "#1f77b4",
@@ -470,6 +465,8 @@ layout_kwargs = dict(
 if zoom_no_pico and "pico_referencia" in st.session_state:
     t_ref = st.session_state.pico_referencia
     layout_kwargs["xaxis"]["range"] = [t_ref - 5, t_ref + 5]
+else:
+    layout_kwargs["xaxis"]["range"] = [janela_ini, janela_fim]
 
 if EIXO_DESLOC in eixos_usados:
     layout_kwargs["yaxis"] = dict(
