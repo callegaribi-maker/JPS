@@ -646,19 +646,14 @@ else:
         )
 
         jc1, jc2, jc3 = st.columns(3)
-        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=10.0, min_value=0.5, step=0.5)
-        janela_depois = jc2.number_input("até (s depois do pico)", value=10.0, min_value=0.5, step=0.5)
+        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=15.0, min_value=0.5, step=0.5)
+        janela_depois = jc2.number_input("até (s depois do pico)", value=15.0, min_value=0.5, step=0.5)
         alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
-        janela_antes_trial1 = st.number_input(
-            "Janela extra só para o Trial 1 (s antes do pico)", value=20.0, min_value=janela_antes, step=1.0,
-            help="O Trial 1 costuma ficar perto de outro trial — aumente aqui pra ver mais contexto antes do pico dele, sem mudar a janela dos demais.",
-        )
 
-        def preparar_curva(t, janela_antes_custom=None):
+        def preparar_curva(t):
             tempo_rel = t["tempo_rel_ext"]
             sinal = t["sinal_ext"]
-            ja = janela_antes_custom if janela_antes_custom is not None else janela_antes
-            mask_janela = (tempo_rel >= -ja) & (tempo_rel <= janela_depois)
+            mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
             tempo_w = tempo_rel[mask_janela]
             sinal_w = sinal[mask_janela]
             if alinhar_zero_y and len(sinal_w) > 0:
@@ -673,7 +668,7 @@ else:
                 trials_numeros_k = {t["trial"] for t in trials_kinem_f}
                 trial1_k = next((t for t in trials_kinem if t["trial"] == 1), None)
                 if trial1_k is not None and 1 not in trials_numeros_k:
-                    tempo_w, sinal_w = preparar_curva(trial1_k, janela_antes_trial1)
+                    tempo_w, sinal_w = preparar_curva(trial1_k)
                     fig_k.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w, mode="lines",
                         name="Trial 1 (excluído da análise)",
@@ -681,8 +676,7 @@ else:
                     ))
                 for t in trials_kinem_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_k
-                    ja_custom = janela_antes_trial1 if t["trial"] == 1 else None
-                    tempo_w, sinal_w = preparar_curva(t, ja_custom)
+                    tempo_w, sinal_w = preparar_curva(t)
                     fig_k.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
@@ -700,7 +694,7 @@ else:
                 trials_numeros_c = {t["trial"] for t in trials_celular_f}
                 trial1_c = next((t for t in trials_celular if t["trial"] == 1), None)
                 if trial1_c is not None and 1 not in trials_numeros_c:
-                    tempo_w, sinal_w = preparar_curva(trial1_c, janela_antes_trial1)
+                    tempo_w, sinal_w = preparar_curva(trial1_c)
                     fig_c.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w, mode="lines",
                         name="Trial 1 (excluído da análise)",
@@ -708,8 +702,7 @@ else:
                     ))
                 for t in trials_celular_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_c
-                    ja_custom = janela_antes_trial1 if t["trial"] == 1 else None
-                    tempo_w, sinal_w = preparar_curva(t, ja_custom)
+                    tempo_w, sinal_w = preparar_curva(t)
                     fig_c.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
