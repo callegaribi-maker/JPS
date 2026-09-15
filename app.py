@@ -413,6 +413,19 @@ def amostra_precisao_media(sigma, margem, alpha=0.05):
     return n
 
 
+def detectar_trials_validos(trials, limiar_fracao=0.5):
+    """Marca como 'suspeitos' (aquecimento/erro) trials cujo pico seja
+    muito menor que a mediana dos demais — usado só para sugerir a
+    seleção inicial, sem excluir nada de forma permanente."""
+    if len(trials) < 3:
+        return [t["trial"] for t in trials]
+    picos = [t["pico"] for t in trials]
+    mediana = float(np.median(picos))
+    if mediana == 0:
+        return [t["trial"] for t in trials]
+    return [t["trial"] for t in trials if t["pico"] >= limiar_fracao * mediana]
+
+
 st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
 
 flexao_kinem = None
@@ -454,9 +467,10 @@ else:
 
     # --- 1) Visualização: cortar/alinhar o início do registro ---
     st.subheader("Visualização")
-    vc1, vc2 = st.columns(2)
+    vc1, vc2, vc3 = st.columns(3)
     cortar_seg = vc1.number_input("Cortar primeiros X segundos (só na visualização)", value=0.0, step=1.0, min_value=0.0)
     alinhar_zero = vc2.checkbox("Alinhar o tempo em zero após o corte", value=True)
+    alinhar_base = vc3.checkbox("Alinhar linha de base (Y) — Kinem e Celular saindo do 0", value=True)
 
     def tempo_visual(tempo):
         tempo = np.asarray(tempo)
@@ -465,15 +479,18 @@ else:
     fig_continuo = go.Figure()
     if flexao_kinem is not None:
         mask_v = tempo_flexao_kinem >= cortar_seg
+        valores_k = flexao_kinem[mask_v]
+        base_k = valores_k.min() if (alinhar_base and len(valores_k) > 0) else 0.0
+        picos_ajuste_k = [t["pico"] - base_k for t in trials_kinem if t["tempo_pico"] >= cortar_seg]
         fig_continuo.add_trace(go.Scatter(
-            x=tempo_visual(tempo_flexao_kinem[mask_v]), y=flexao_kinem[mask_v], mode="lines",
+            x=tempo_visual(tempo_flexao_kinem[mask_v]), y=valores_k - base_k, mode="lines",
             name="Kinem", line=dict(color="#1f77b4"),
         ))
         picos_visiveis_k = [t for t in trials_kinem if t["tempo_pico"] >= cortar_seg]
         if picos_visiveis_k:
             fig_continuo.add_trace(go.Scatter(
                 x=tempo_visual(np.array([t["tempo_pico"] for t in picos_visiveis_k])),
-                y=[t["pico"] for t in picos_visiveis_k],
+                y=picos_ajuste_k,
                 mode="markers+text",
                 text=[f"T{t['trial']}" for t in picos_visiveis_k],
                 textposition="top center",
@@ -482,15 +499,18 @@ else:
             ))
     if flexao_celular is not None:
         mask_vc = tempo_flexao_celular >= cortar_seg
+        valores_c = flexao_celular[mask_vc]
+        base_c = valores_c.min() if (alinhar_base and len(valores_c) > 0) else 0.0
+        picos_ajuste_c = [t["pico"] - base_c for t in trials_celular if t["tempo_pico"] >= cortar_seg]
         fig_continuo.add_trace(go.Scatter(
-            x=tempo_visual(tempo_flexao_celular[mask_vc]), y=flexao_celular[mask_vc], mode="lines",
+            x=tempo_visual(tempo_flexao_celular[mask_vc]), y=valores_c - base_c, mode="lines",
             name="Celular (estimado)", line=dict(color="#d62728"),
         ))
         picos_visiveis_c = [t for t in trials_celular if t["tempo_pico"] >= cortar_seg]
         if picos_visiveis_c:
             fig_continuo.add_trace(go.Scatter(
                 x=tempo_visual(np.array([t["tempo_pico"] for t in picos_visiveis_c])),
-                y=[t["pico"] for t in picos_visiveis_c],
+                y=picos_ajuste_c,
                 mode="markers+text",
                 text=[f"T{t['trial']}" for t in picos_visiveis_c],
                 textposition="bottom center",
@@ -498,7 +518,8 @@ else:
                 name="Trials (Celular)",
             ))
     fig_continuo.update_layout(
-        xaxis_title="Tempo (s)", yaxis_title="Ângulo (°)",
+        xaxis_title="Tempo (s)",
+        yaxis_title="Ângulo (°)" + (" — relativo à linha de base" if alinhar_base else ""),
         height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
@@ -510,7 +531,11 @@ else:
         st.markdown("**Kinem — trials incluídos**")
         if trials_kinem:
             todos_k = [t["trial"] for t in trials_kinem]
-            incluidos_k = st.multiselect("Trials", options=todos_k, default=todos_k, key="incluidos_kinem", label_visibility="collapsed")
+            default_k = detectar_trials_validos(trials_kinem)
+            if len(default_k) < len(todos_k):
+                excluidos = sorted(set(todos_k) - set(default_k))
+                st.caption(f"⚠️ Trial(s) {excluidos} parecem aquecimento/outlier (pico bem menor que os demais) — já vêm desmarcados.")
+            incluidos_k = st.multiselect("Trials", options=todos_k, default=default_k, key="incluidos_kinem", label_visibility="collapsed")
             trials_kinem_f = [t for t in trials_kinem if t["trial"] in incluidos_k]
             if trials_kinem_f:
                 opcoes_trial = [f"Trial {t['trial']}" for t in trials_kinem_f]
@@ -527,7 +552,11 @@ else:
         st.markdown("**Celular — trials incluídos**")
         if trials_celular:
             todos_c = [t["trial"] for t in trials_celular]
-            incluidos_c = st.multiselect("Trials", options=todos_c, default=todos_c, key="incluidos_celular", label_visibility="collapsed")
+            default_c = detectar_trials_validos(trials_celular)
+            if len(default_c) < len(todos_c):
+                excluidos_c = sorted(set(todos_c) - set(default_c))
+                st.caption(f"⚠️ Trial(s) {excluidos_c} parecem aquecimento/outlier (pico bem menor que os demais) — já vêm desmarcados.")
+            incluidos_c = st.multiselect("Trials", options=todos_c, default=default_c, key="incluidos_celular", label_visibility="collapsed")
             trials_celular_f = [t for t in trials_celular if t["trial"] in incluidos_c]
             if trials_celular_f:
                 opcoes_trial_c = [f"Trial {t['trial']}" for t in trials_celular_f]
@@ -563,7 +592,7 @@ else:
             tempo_w = tempo_rel[mask_janela]
             sinal_w = sinal[mask_janela]
             if alinhar_zero_y and len(sinal_w) > 0:
-                baseline = sinal_w[0]
+                baseline = sinal_w.min()  # mínimo dentro da janela, robusto a onde a janela começa
                 sinal_w = sinal_w - baseline
             return tempo_w, sinal_w
 
