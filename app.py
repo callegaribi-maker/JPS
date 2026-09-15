@@ -238,6 +238,7 @@ def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0, margem_extra_
 
         trials.append({
             "trial": i + 1,
+            "idx_pico": int(p),
             "tempo_pico": float(tempo[p]),
             "pico": float(sinal[p]),
             "adm": float(segmento.max() - segmento.min()),
@@ -436,6 +437,32 @@ def detectar_trials_validos(trials, limiar_fracao=0.5):
     if mediana == 0:
         return [t["trial"] for t in trials]
     return [t["trial"] for t in trials if t["pico"] >= limiar_fracao * mediana]
+
+
+def recortar_trial_sem_sobreposicao(trial, trials_incluidos_ordenados, tempo_completo, sinal_completo):
+    """Recorta o segmento de um trial usando como limites apenas os
+    trials vizinhos que estão INCLUÍDOS na análise (ignora trials
+    excluídos, como um aquecimento) — assim um trial ganha mais espaço
+    quando o vizinho mais próximo foi desmarcado, sem nunca mostrar o
+    ciclo de outro trial incluído."""
+    idx_atual = trial["idx_pico"]
+    posicao = next(i for i, t in enumerate(trials_incluidos_ordenados) if t["trial"] == trial["trial"])
+
+    if posicao > 0:
+        idx_anterior = trials_incluidos_ordenados[posicao - 1]["idx_pico"]
+        ini = int((idx_anterior + idx_atual) / 2)
+    else:
+        ini = 0
+
+    if posicao < len(trials_incluidos_ordenados) - 1:
+        idx_seguinte = trials_incluidos_ordenados[posicao + 1]["idx_pico"]
+        fim = int((idx_atual + idx_seguinte) / 2)
+    else:
+        fim = len(sinal_completo) - 1
+
+    segmento = sinal_completo[ini:fim + 1]
+    tempo_segmento = tempo_completo[ini:fim + 1]
+    return tempo_segmento - tempo_completo[idx_atual], segmento
 
 
 st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
@@ -640,35 +667,49 @@ else:
         st.subheader("Trials sobrepostos (relativo ao trial de referência)")
         st.caption(
             "Cada linha é o registro completo do ângulo durante aquele "
-            "trial, com o tempo centralizado no instante do pico (t=0 "
-            "= pico de flexão). A linha do trial de referência aparece "
-            "mais grossa."
+            "trial (sem repetir o ciclo do vizinho), com o tempo "
+            "centralizado no instante do pico (t=0 = pico de flexão). "
+            "A linha do trial de referência aparece mais grossa. Um "
+            "trial ganha mais espaço automaticamente quando o vizinho "
+            "mais próximo está desmarcado (como o Trial 1)."
         )
 
         jc1, jc2, jc3 = st.columns(3)
-        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=15.0, min_value=0.5, step=0.5)
-        janela_depois = jc2.number_input("até (s depois do pico)", value=15.0, min_value=0.5, step=0.5)
+        janela_antes = jc1.number_input("Mostrar no máximo até (s antes do pico)", value=15.0, min_value=0.5, step=0.5)
+        janela_depois = jc2.number_input("no máximo até (s depois do pico)", value=15.0, min_value=0.5, step=0.5)
         alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
 
-        def preparar_curva(t):
+        def preparar_curva_ext(t):
+            """Para trials excluídos (ex: Trial 1): usa a janela ampla fixa."""
             tempo_rel = t["tempo_rel_ext"]
             sinal = t["sinal_ext"]
             mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
             tempo_w = tempo_rel[mask_janela]
             sinal_w = sinal[mask_janela]
             if alinhar_zero_y and len(sinal_w) > 0:
-                baseline = sinal_w.min()  # mínimo dentro da janela, robusto a onde a janela começa
-                sinal_w = sinal_w - baseline
+                sinal_w = sinal_w - sinal_w.min()
+            return tempo_w, sinal_w
+
+        def preparar_curva_incluido(t, incluidos_ordenados, tempo_completo, sinal_completo):
+            """Para trials incluídos: recorta sem sobrepor o vizinho
+            incluído mais próximo, depois aplica a janela máxima."""
+            tempo_rel, sinal = recortar_trial_sem_sobreposicao(t, incluidos_ordenados, tempo_completo, sinal_completo)
+            mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
+            tempo_w = tempo_rel[mask_janela]
+            sinal_w = sinal[mask_janela]
+            if alinhar_zero_y and len(sinal_w) > 0:
+                sinal_w = sinal_w - sinal_w.min()
             return tempo_w, sinal_w
 
         col_ck, col_cc = st.columns(2)
         with col_ck:
             if trials_kinem_f:
                 fig_k = go.Figure()
+                incluidos_ord_k = sorted(trials_kinem_f, key=lambda t: t["tempo_pico"])
                 trials_numeros_k = {t["trial"] for t in trials_kinem_f}
                 trial1_k = next((t for t in trials_kinem if t["trial"] == 1), None)
                 if trial1_k is not None and 1 not in trials_numeros_k:
-                    tempo_w, sinal_w = preparar_curva(trial1_k)
+                    tempo_w, sinal_w = preparar_curva_ext(trial1_k)
                     fig_k.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w, mode="lines",
                         name="Trial 1 (excluído da análise)",
@@ -676,7 +717,7 @@ else:
                     ))
                 for t in trials_kinem_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_k
-                    tempo_w, sinal_w = preparar_curva(t)
+                    tempo_w, sinal_w = preparar_curva_incluido(t, incluidos_ord_k, tempo_flexao_kinem, flexao_kinem)
                     fig_k.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
@@ -691,10 +732,11 @@ else:
         with col_cc:
             if trials_celular_f:
                 fig_c = go.Figure()
+                incluidos_ord_c = sorted(trials_celular_f, key=lambda t: t["tempo_pico"])
                 trials_numeros_c = {t["trial"] for t in trials_celular_f}
                 trial1_c = next((t for t in trials_celular if t["trial"] == 1), None)
                 if trial1_c is not None and 1 not in trials_numeros_c:
-                    tempo_w, sinal_w = preparar_curva(trial1_c)
+                    tempo_w, sinal_w = preparar_curva_ext(trial1_c)
                     fig_c.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w, mode="lines",
                         name="Trial 1 (excluído da análise)",
@@ -702,7 +744,7 @@ else:
                     ))
                 for t in trials_celular_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_c
-                    tempo_w, sinal_w = preparar_curva(t)
+                    tempo_w, sinal_w = preparar_curva_incluido(t, incluidos_ord_c, tempo_flexao_celular, flexao_celular)
                     fig_c.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
@@ -748,21 +790,28 @@ else:
     if trials_kinem_f or trials_celular_f:
         fig_trials = go.Figure()
         if trials_kinem_f:
-            fig_trials.add_trace(go.Scatter(
-                x=[t["trial"] for t in trials_kinem_f],
+            fig_trials.add_trace(go.Bar(
+                x=[f"Trial {t['trial']}" for t in trials_kinem_f],
                 y=[t["pico"] for t in trials_kinem_f],
-                mode="lines+markers", name="Kinem",
+                name="Kinem",
+                marker_color="#1f77b4",
+                text=[f"{t['pico']:.1f}°" for t in trials_kinem_f],
+                textposition="outside",
             ))
         if trials_celular_f:
-            fig_trials.add_trace(go.Scatter(
-                x=[t["trial"] for t in trials_celular_f],
+            fig_trials.add_trace(go.Bar(
+                x=[f"Trial {t['trial']}" for t in trials_celular_f],
                 y=[t["pico"] for t in trials_celular_f],
-                mode="lines+markers", name="Celular (estimado)",
+                name="Celular (estimado)",
+                marker_color="#d62728",
+                text=[f"{t['pico']:.1f}°" for t in trials_celular_f],
+                textposition="outside",
             ))
         fig_trials.update_layout(
             title="Ângulo de pico por trial",
             xaxis_title="Trial", yaxis_title="Ângulo de pico (°)",
-            height=350,
+            barmode="group",
+            height=380,
         )
         st.plotly_chart(fig_trials, use_container_width=True)
 
