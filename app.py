@@ -581,8 +581,8 @@ else:
         )
 
         jc1, jc2, jc3 = st.columns(3)
-        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=6.0, min_value=0.5, step=0.5)
-        janela_depois = jc2.number_input("até (s depois do pico)", value=6.0, min_value=0.5, step=0.5)
+        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=10.0, min_value=0.5, step=0.5)
+        janela_depois = jc2.number_input("até (s depois do pico)", value=10.0, min_value=0.5, step=0.5)
         alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
 
         def preparar_curva(t):
@@ -686,46 +686,41 @@ else:
     # --- 4) Cálculo amostral ---
     st.subheader("📐 Cálculo amostral")
     st.caption(
-        "Três formas de estimar quantas pessoas seriam necessárias, "
-        "usando a variabilidade observada nestes dados como ponto de "
-        "partida (todos os valores abaixo são editáveis)."
+        "Usando a variabilidade observada nestes dados (desvio-padrão "
+        "do ângulo de pico entre trials) como ponto de partida — todos "
+        "os valores abaixo são editáveis."
     )
 
     picos_kinem_ref = [t["pico"] for t in trials_kinem_f] if trials_kinem_f else []
-    picos_celular_ref = [t["pico"] for t in trials_celular_f] if trials_celular_f else []
     sd_kinem = float(np.std(picos_kinem_ref, ddof=1)) if len(picos_kinem_ref) > 1 else 5.0
-    k_trials_default = len(trials_kinem_f) if trials_kinem_f else 6
 
-    icc_atual = None
-    trials_pareados = []
-    if trials_kinem_f and trials_celular_f:
-        nums_comuns = sorted(set(t["trial"] for t in trials_kinem_f) & set(t["trial"] for t in trials_celular_f))
-        if len(nums_comuns) >= 3:
-            picos_k_map = {t["trial"]: t["pico"] for t in trials_kinem_f}
-            picos_c_map = {t["trial"]: t["pico"] for t in trials_celular_f}
-            trials_pareados = nums_comuns
-            dados_icc = np.array([[picos_k_map[n], picos_c_map[n]] for n in nums_comuns])
-            icc_atual = icc_2_1(dados_icc)
+    from scipy.stats import norm
+    z_alpha_ref = norm.ppf(1 - 0.05 / 2)
+    z_beta_ref = norm.ppf(0.80)
+    n_alvo_exemplo = 23
+    delta_exemplo = (z_alpha_ref + z_beta_ref) * sd_kinem / (n_alvo_exemplo ** 0.5)
 
-    tab_icc, tab_diff, tab_precisao = st.tabs([
-        "Confiabilidade (ICC)", "Diferença mínima (poder)", "Precisão da média (IC)"
+    st.info(
+        f"**Exemplo de justificativa para o projeto** (medidas pareadas, "
+        f"mesma pessoa nas duas condições):\n\n"
+        f"Usando o desvio-padrão do ângulo de pico observado nestes dados "
+        f"(SD = {sd_kinem:.2f}°), com nível de significância α = 0,05 "
+        f"(bicaudal, z = {z_alpha_ref:.2f}) e poder estatístico de 80% "
+        f"(z = {z_beta_ref:.2f}), a fórmula para amostra pareada é:\n\n"
+        f"n = [(z_α/2 + z_β) × SD / δ]²\n\n"
+        f"Isolando δ (diferença mínima detectável) para uma amostra de "
+        f"**N = {n_alvo_exemplo} sujeitos pareados**:\n\n"
+        f"δ = (z_α/2 + z_β) × SD / √N = ({z_alpha_ref:.2f} + {z_beta_ref:.2f}) × "
+        f"{sd_kinem:.2f}° / √{n_alvo_exemplo} ≈ **{delta_exemplo:.2f}°**\n\n"
+        f"Ou seja: com {n_alvo_exemplo} sujeitos avaliados nas duas condições "
+        f"(medidas pareadas), o estudo teria poder de 80% para detectar uma "
+        f"diferença mínima de aproximadamente {delta_exemplo:.2f}° no ângulo "
+        f"de flexão do cotovelo, ao nível de significância de 5%."
+    )
+
+    tab_diff, tab_precisao = st.tabs([
+        "Diferença mínima (poder)", "Precisão da média (IC)"
     ])
-
-    with tab_icc:
-        st.write(
-            "Quantas **pessoas** são necessárias para estimar a "
-            "confiabilidade (ICC) entre os dois dispositivos com uma "
-            "precisão-alvo, dado que cada pessoa faz *k* trials."
-        )
-        if icc_atual is not None:
-            st.caption(f"ICC(2,1) observado nestes dados (trials {trials_pareados}): **{icc_atual:.3f}**")
-        ic1, ic2, ic3, ic4 = st.columns(4)
-        rho_input = ic1.number_input("ICC esperado", value=round(icc_atual, 2) if icc_atual is not None else 0.75, min_value=0.01, max_value=0.99, step=0.05)
-        k_input = ic2.number_input("Trials por pessoa (k)", value=k_trials_default, min_value=2, step=1)
-        w_input = ic3.number_input("Precisão desejada (± no IC do ICC)", value=0.15, min_value=0.01, step=0.01)
-        alpha_icc = ic4.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_icc")
-        n_icc = amostra_icc_bonett(rho_input, k_input, w_input, alpha_icc)
-        st.success(f"**N ≈ {int(np.ceil(n_icc))} pessoas** (com k={int(k_input)} trials cada)")
 
     with tab_diff:
         st.write(
@@ -735,10 +730,10 @@ else:
         )
         dc1, dc2, dc3, dc4 = st.columns(4)
         sigma_input = dc1.number_input("Desvio-padrão (°)", value=round(sd_kinem, 1), min_value=0.1, step=0.5, key="sigma_diff")
-        delta_input = dc2.number_input("Diferença mínima a detectar (°)", value=5.0, min_value=0.1, step=0.5)
+        delta_input = dc2.number_input("Diferença mínima a detectar (°)", value=round(delta_exemplo, 2), min_value=0.1, step=0.5)
         alpha_diff = dc3.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_diff")
         power_diff = dc4.number_input("Poder (1-β)", value=0.80, min_value=0.5, max_value=0.99, step=0.05)
-        tipo_teste = st.selectbox("Tipo de comparação", ["Grupos independentes", "Medidas pareadas (mesma pessoa)"])
+        tipo_teste = st.selectbox("Tipo de comparação", ["Medidas pareadas (mesma pessoa)", "Grupos independentes"])
         n_diff = amostra_diferenca_minima(sigma_input, delta_input, alpha_diff, power_diff, pareado=(tipo_teste.startswith("Medidas")))
         if tipo_teste.startswith("Medidas"):
             st.success(f"**N ≈ {int(np.ceil(n_diff))} pessoas** (medidas repetidas)")
