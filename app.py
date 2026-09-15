@@ -356,6 +356,63 @@ def tempo_ajustado(fonte):
 
 
 # --- Ângulo de flexão do cotovelo: trials, ADM e erro vs trial 1 ---
+def icc_2_1(data):
+    """ICC(2,1): concordância absoluta, medida única, efeitos aleatórios
+    de dois fatores. data: array (n_sujeitos, k_avaliadores/dispositivos)."""
+    n, k = data.shape
+    mean_subjects = data.mean(axis=1)
+    mean_raters = data.mean(axis=0)
+    grand_mean = data.mean()
+
+    sst = ((data - grand_mean) ** 2).sum()
+    ssr = k * ((mean_subjects - grand_mean) ** 2).sum()
+    ssc = n * ((mean_raters - grand_mean) ** 2).sum()
+    sse = sst - ssr - ssc
+
+    df_r, df_c, df_e = n - 1, k - 1, (n - 1) * (k - 1)
+    if df_r <= 0 or df_e <= 0:
+        return None
+    msr = ssr / df_r
+    msc = ssc / df_c if df_c > 0 else 0
+    mse = sse / df_e
+
+    denom = msr + (k - 1) * mse + k * (msc - mse) / n
+    if denom == 0:
+        return None
+    return (msr - mse) / denom
+
+
+def amostra_icc_bonett(rho, k, w, alpha=0.05):
+    """Bonett (2002): tamanho amostral p/ estimar ICC com precisão-alvo
+    (largura do IC = 2w), com k medidas por sujeito."""
+    from scipy.stats import norm
+    z = norm.ppf(1 - alpha / 2)
+    n = 1 + (2 * k * (1 - rho) * (1 + (k - 1) * rho) ** 2 * z ** 2) / ((k - 1) * w ** 2)
+    return n
+
+
+def amostra_diferenca_minima(sigma, delta, alpha=0.05, power=0.8, pareado=False):
+    """Tamanho amostral p/ detectar uma diferença mínima `delta`, dado um
+    desvio-padrão `sigma` (teste t, aproximação normal)."""
+    from scipy.stats import norm
+    z_alpha = norm.ppf(1 - alpha / 2)
+    z_beta = norm.ppf(power)
+    if pareado:
+        n = ((z_alpha + z_beta) * sigma / delta) ** 2
+    else:
+        n = 2 * ((z_alpha + z_beta) * sigma / delta) ** 2
+    return n
+
+
+def amostra_precisao_media(sigma, margem, alpha=0.05):
+    """Tamanho amostral p/ estimar a média com uma margem de erro alvo
+    (intervalo de confiança), dado o desvio-padrão observado."""
+    from scipy.stats import norm
+    z = norm.ppf(1 - alpha / 2)
+    n = (z * sigma / margem) ** 2
+    return n
+
+
 st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
 
 flexao_kinem = None
@@ -395,58 +452,65 @@ else:
     trials_kinem = detectar_trials(tempo_flexao_kinem, flexao_kinem, prominence, distance_s) if flexao_kinem is not None else []
     trials_celular = detectar_trials(tempo_flexao_celular, flexao_celular, prominence, distance_s) if flexao_celular is not None else []
 
-    # --- Registro contínuo, com os trials marcados ---
-    st.subheader("Registro contínuo (com os trials marcados)")
+    # --- 1) Visualização: cortar/alinhar o início do registro ---
+    st.subheader("Visualização")
+    vc1, vc2 = st.columns(2)
+    cortar_seg = vc1.number_input("Cortar primeiros X segundos (só na visualização)", value=0.0, step=1.0, min_value=0.0)
+    alinhar_zero = vc2.checkbox("Alinhar o tempo em zero após o corte", value=True)
+
+    def tempo_visual(tempo):
+        tempo = np.asarray(tempo)
+        return tempo - cortar_seg if alinhar_zero else tempo
+
     fig_continuo = go.Figure()
     if flexao_kinem is not None:
+        mask_v = tempo_flexao_kinem >= cortar_seg
         fig_continuo.add_trace(go.Scatter(
-            x=tempo_flexao_kinem, y=flexao_kinem, mode="lines",
+            x=tempo_visual(tempo_flexao_kinem[mask_v]), y=flexao_kinem[mask_v], mode="lines",
             name="Kinem", line=dict(color="#1f77b4"),
         ))
-        if trials_kinem:
+        picos_visiveis_k = [t for t in trials_kinem if t["tempo_pico"] >= cortar_seg]
+        if picos_visiveis_k:
             fig_continuo.add_trace(go.Scatter(
-                x=[t["tempo_pico"] for t in trials_kinem],
-                y=[t["pico"] for t in trials_kinem],
+                x=tempo_visual(np.array([t["tempo_pico"] for t in picos_visiveis_k])),
+                y=[t["pico"] for t in picos_visiveis_k],
                 mode="markers+text",
-                text=[f"T{t['trial']}" for t in trials_kinem],
+                text=[f"T{t['trial']}" for t in picos_visiveis_k],
                 textposition="top center",
                 marker=dict(color="#1f77b4", size=9, symbol="diamond"),
                 name="Trials (Kinem)",
             ))
     if flexao_celular is not None:
+        mask_vc = tempo_flexao_celular >= cortar_seg
         fig_continuo.add_trace(go.Scatter(
-            x=tempo_flexao_celular, y=flexao_celular, mode="lines",
+            x=tempo_visual(tempo_flexao_celular[mask_vc]), y=flexao_celular[mask_vc], mode="lines",
             name="Celular (estimado)", line=dict(color="#d62728"),
         ))
-        if trials_celular:
+        picos_visiveis_c = [t for t in trials_celular if t["tempo_pico"] >= cortar_seg]
+        if picos_visiveis_c:
             fig_continuo.add_trace(go.Scatter(
-                x=[t["tempo_pico"] for t in trials_celular],
-                y=[t["pico"] for t in trials_celular],
+                x=tempo_visual(np.array([t["tempo_pico"] for t in picos_visiveis_c])),
+                y=[t["pico"] for t in picos_visiveis_c],
                 mode="markers+text",
-                text=[f"T{t['trial']}" for t in trials_celular],
+                text=[f"T{t['trial']}" for t in picos_visiveis_c],
                 textposition="bottom center",
                 marker=dict(color="#d62728", size=9, symbol="diamond"),
                 name="Trials (Celular)",
             ))
     fig_continuo.update_layout(
         xaxis_title="Tempo (s)", yaxis_title="Ângulo (°)",
-        height=450,
+        height=400,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     st.plotly_chart(fig_continuo, use_container_width=True)
 
+    # --- Seleção de trials incluídos + referência (usada nas próximas seções) ---
     col_k, col_c = st.columns(2)
-
     with col_k:
-        st.subheader("Kinem")
+        st.markdown("**Kinem — trials incluídos**")
         if trials_kinem:
             todos_k = [t["trial"] for t in trials_kinem]
-            incluidos_k = st.multiselect(
-                "Trials incluídos na análise",
-                options=todos_k,
-                default=todos_k,
-                key="incluidos_kinem",
-            )
+            incluidos_k = st.multiselect("Trials", options=todos_k, default=todos_k, key="incluidos_kinem", label_visibility="collapsed")
             trials_kinem_f = [t for t in trials_kinem if t["trial"] in incluidos_k]
             if trials_kinem_f:
                 opcoes_trial = [f"Trial {t['trial']}" for t in trials_kinem_f]
@@ -454,25 +518,16 @@ else:
                 ref_idx_k = st.selectbox("Trial de referência", opcoes_trial, index=indice_default, key="ref_kinem")
                 idx_k = opcoes_trial.index(ref_idx_k)
                 trials_kinem_f = calcular_erros(trials_kinem_f, idx_k)
-                df_trials_k = pd.DataFrame(trials_kinem_f)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
-                df_trials_k.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
-                st.dataframe(df_trials_k.round(2), use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum trial incluído.")
         else:
             trials_kinem_f = []
             st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
-
     with col_c:
-        st.subheader("Celular (estimado)")
+        st.markdown("**Celular — trials incluídos**")
         if trials_celular:
             todos_c = [t["trial"] for t in trials_celular]
-            incluidos_c = st.multiselect(
-                "Trials incluídos na análise",
-                options=todos_c,
-                default=todos_c,
-                key="incluidos_celular",
-            )
+            incluidos_c = st.multiselect("Trials", options=todos_c, default=todos_c, key="incluidos_celular", label_visibility="collapsed")
             trials_celular_f = [t for t in trials_celular if t["trial"] in incluidos_c]
             if trials_celular_f:
                 opcoes_trial_c = [f"Trial {t['trial']}" for t in trials_celular_f]
@@ -480,14 +535,82 @@ else:
                 ref_idx_c = st.selectbox("Trial de referência", opcoes_trial_c, index=indice_default_c, key="ref_celular")
                 idx_c = opcoes_trial_c.index(ref_idx_c)
                 trials_celular_f = calcular_erros(trials_celular_f, idx_c)
-                df_trials_c = pd.DataFrame(trials_celular_f)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
-                df_trials_c.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
-                st.dataframe(df_trials_c.round(2), use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhum trial incluído.")
         else:
             trials_celular_f = []
             st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
+
+    # --- 2) Trials sobrepostos, em relação ao trial de referência ---
+    if trials_kinem_f or trials_celular_f:
+        st.subheader("Trials sobrepostos (relativo ao trial de referência)")
+        st.caption(
+            "Cada linha é o registro completo do ângulo durante aquele "
+            "trial, com o tempo centralizado no instante do pico (t=0 "
+            "= pico de flexão). A linha do trial de referência aparece "
+            "mais grossa."
+        )
+        col_ck, col_cc = st.columns(2)
+        with col_ck:
+            if trials_kinem_f:
+                fig_k = go.Figure()
+                for t in trials_kinem_f:
+                    eh_ref = f"Trial {t['trial']}" == ref_idx_k
+                    fig_k.add_trace(go.Scatter(
+                        x=t["tempo_rel"], y=t["sinal"],
+                        mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
+                        line=dict(width=4 if eh_ref else 2),
+                    ))
+                fig_k.update_layout(
+                    title="Kinem", xaxis_title="Tempo relativo ao pico (s)",
+                    yaxis_title="Ângulo (°)", height=400,
+                )
+                st.plotly_chart(fig_k, use_container_width=True)
+        with col_cc:
+            if trials_celular_f:
+                fig_c = go.Figure()
+                for t in trials_celular_f:
+                    eh_ref = f"Trial {t['trial']}" == ref_idx_c
+                    fig_c.add_trace(go.Scatter(
+                        x=t["tempo_rel"], y=t["sinal"],
+                        mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
+                        line=dict(width=4 if eh_ref else 2),
+                    ))
+                fig_c.update_layout(
+                    title="Celular (estimado)", xaxis_title="Tempo relativo ao pico (s)",
+                    yaxis_title="Ângulo (°)", height=400,
+                )
+                st.plotly_chart(fig_c, use_container_width=True)
+
+    # --- 3) Tabela com média e desvio-padrão ---
+    st.subheader("Tabela — trials, ADM e erro (com média e desvio-padrão)")
+
+    def tabela_com_resumo(trials_f):
+        df = pd.DataFrame(trials_f)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
+        df.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
+        resumo = pd.DataFrame({
+            "Trial": ["Média", "Desvio padrão (SD)"],
+            "t pico (s)": [df["t pico (s)"].mean(), df["t pico (s)"].std()],
+            "Pico (°)": [df["Pico (°)"].mean(), df["Pico (°)"].std()],
+            "ADM (°)": [df["ADM (°)"].mean(), df["ADM (°)"].std()],
+            "Erro abs (°)": [df["Erro abs (°)"].mean(), df["Erro abs (°)"].std()],
+            "Erro rel (%)": [df["Erro rel (%)"].mean(), df["Erro rel (%)"].std()],
+        })
+        return pd.concat([df, resumo], ignore_index=True)
+
+    col_tk, col_tc = st.columns(2)
+    with col_tk:
+        st.markdown("**Kinem**")
+        if trials_kinem_f:
+            st.dataframe(tabela_com_resumo(trials_kinem_f).round(2), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum trial incluído.")
+    with col_tc:
+        st.markdown("**Celular (estimado)**")
+        if trials_celular_f:
+            st.dataframe(tabela_com_resumo(trials_celular_f).round(2), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum trial incluído.")
 
     if trials_kinem_f or trials_celular_f:
         fig_trials = go.Figure()
@@ -510,38 +633,77 @@ else:
         )
         st.plotly_chart(fig_trials, use_container_width=True)
 
-    # --- Curvas completas de cada trial (não só o valor de pico) ---
-    if trials_kinem_f or trials_celular_f:
-        st.subheader("Curvas de ângulo por trial (alinhadas pelo pico)")
-        st.caption(
-            "Cada linha é o registro completo do ângulo durante aquele "
-            "trial, com o tempo centralizado no instante do pico (t=0 "
-            "= pico de flexão)."
+    # --- 4) Cálculo amostral ---
+    st.subheader("📐 Cálculo amostral")
+    st.caption(
+        "Três formas de estimar quantas pessoas seriam necessárias, "
+        "usando a variabilidade observada nestes dados como ponto de "
+        "partida (todos os valores abaixo são editáveis)."
+    )
+
+    picos_kinem_ref = [t["pico"] for t in trials_kinem_f] if trials_kinem_f else []
+    picos_celular_ref = [t["pico"] for t in trials_celular_f] if trials_celular_f else []
+    sd_kinem = float(np.std(picos_kinem_ref, ddof=1)) if len(picos_kinem_ref) > 1 else 5.0
+    k_trials_default = len(trials_kinem_f) if trials_kinem_f else 6
+
+    icc_atual = None
+    trials_pareados = []
+    if trials_kinem_f and trials_celular_f:
+        nums_comuns = sorted(set(t["trial"] for t in trials_kinem_f) & set(t["trial"] for t in trials_celular_f))
+        if len(nums_comuns) >= 3:
+            picos_k_map = {t["trial"]: t["pico"] for t in trials_kinem_f}
+            picos_c_map = {t["trial"]: t["pico"] for t in trials_celular_f}
+            trials_pareados = nums_comuns
+            dados_icc = np.array([[picos_k_map[n], picos_c_map[n]] for n in nums_comuns])
+            icc_atual = icc_2_1(dados_icc)
+
+    tab_icc, tab_diff, tab_precisao = st.tabs([
+        "Confiabilidade (ICC)", "Diferença mínima (poder)", "Precisão da média (IC)"
+    ])
+
+    with tab_icc:
+        st.write(
+            "Quantas **pessoas** são necessárias para estimar a "
+            "confiabilidade (ICC) entre os dois dispositivos com uma "
+            "precisão-alvo, dado que cada pessoa faz *k* trials."
         )
-        col_ck, col_cc = st.columns(2)
-        with col_ck:
-            if trials_kinem_f:
-                fig_k = go.Figure()
-                for t in trials_kinem_f:
-                    fig_k.add_trace(go.Scatter(
-                        x=t["tempo_rel"], y=t["sinal"],
-                        mode="lines", name=f"Trial {t['trial']}",
-                    ))
-                fig_k.update_layout(
-                    title="Kinem", xaxis_title="Tempo relativo ao pico (s)",
-                    yaxis_title="Ângulo (°)", height=400,
-                )
-                st.plotly_chart(fig_k, use_container_width=True)
-        with col_cc:
-            if trials_celular_f:
-                fig_c = go.Figure()
-                for t in trials_celular_f:
-                    fig_c.add_trace(go.Scatter(
-                        x=t["tempo_rel"], y=t["sinal"],
-                        mode="lines", name=f"Trial {t['trial']}",
-                    ))
-                fig_c.update_layout(
-                    title="Celular (estimado)", xaxis_title="Tempo relativo ao pico (s)",
-                    yaxis_title="Ângulo (°)", height=400,
-                )
-                st.plotly_chart(fig_c, use_container_width=True)
+        if icc_atual is not None:
+            st.caption(f"ICC(2,1) observado nestes dados (trials {trials_pareados}): **{icc_atual:.3f}**")
+        ic1, ic2, ic3, ic4 = st.columns(4)
+        rho_input = ic1.number_input("ICC esperado", value=round(icc_atual, 2) if icc_atual is not None else 0.75, min_value=0.01, max_value=0.99, step=0.05)
+        k_input = ic2.number_input("Trials por pessoa (k)", value=k_trials_default, min_value=2, step=1)
+        w_input = ic3.number_input("Precisão desejada (± no IC do ICC)", value=0.15, min_value=0.01, step=0.01)
+        alpha_icc = ic4.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_icc")
+        n_icc = amostra_icc_bonett(rho_input, k_input, w_input, alpha_icc)
+        st.success(f"**N ≈ {int(np.ceil(n_icc))} pessoas** (com k={int(k_input)} trials cada)")
+
+    with tab_diff:
+        st.write(
+            "Quantas pessoas são necessárias para detectar uma "
+            "**diferença mínima** entre duas condições, dado o "
+            "desvio-padrão observado entre trials."
+        )
+        dc1, dc2, dc3, dc4 = st.columns(4)
+        sigma_input = dc1.number_input("Desvio-padrão (°)", value=round(sd_kinem, 1), min_value=0.1, step=0.5, key="sigma_diff")
+        delta_input = dc2.number_input("Diferença mínima a detectar (°)", value=5.0, min_value=0.1, step=0.5)
+        alpha_diff = dc3.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_diff")
+        power_diff = dc4.number_input("Poder (1-β)", value=0.80, min_value=0.5, max_value=0.99, step=0.05)
+        tipo_teste = st.radio("Tipo de comparação", ["Grupos independentes", "Medidas pareadas (mesma pessoa)"], horizontal=True)
+        n_diff = amostra_diferenca_minima(sigma_input, delta_input, alpha_diff, power_diff, pareado=(tipo_teste.startswith("Medidas")))
+        if tipo_teste.startswith("Medidas"):
+            st.success(f"**N ≈ {int(np.ceil(n_diff))} pessoas** (medidas repetidas)")
+        else:
+            st.success(f"**N ≈ {int(np.ceil(n_diff))} pessoas por grupo** (≈ {int(np.ceil(n_diff))*2} no total)")
+
+    with tab_precisao:
+        st.write(
+            "Quantas pessoas são necessárias para estimar a **média** "
+            "com uma margem de erro alvo (intervalo de confiança), "
+            "dado o desvio-padrão observado."
+        )
+        pc1b, pc2b, pc3b = st.columns(3)
+        sigma_input2 = pc1b.number_input("Desvio-padrão (°)", value=round(sd_kinem, 1), min_value=0.1, step=0.5, key="sigma_precisao")
+        margem_input = pc2b.number_input("Margem de erro alvo (°)", value=3.0, min_value=0.1, step=0.5)
+        alpha_precisao = pc3b.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_precisao")
+        n_precisao = amostra_precisao_media(sigma_input2, margem_input, alpha_precisao)
+        st.success(f"**N ≈ {int(np.ceil(n_precisao))} pessoas**")
