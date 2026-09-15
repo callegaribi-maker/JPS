@@ -465,9 +465,8 @@ else:
     st.caption(
         "Kinem: ângulo articular real (0° = extensão total). Celular: "
         "estimativa pela diferença de inclinação entre o celular do "
-        "Braço e o do Punho — é uma aproximação, não o mesmo cálculo do "
-        "Kinem, então compare a *consistência entre trials* de cada "
-        "dispositivo, não o valor absoluto entre eles."
+        "Braço e o do Punho, corrigida pela calibração funcional "
+        "abaixo (se configurada)."
     )
 
     pc1, pc2 = st.columns(2)
@@ -476,6 +475,60 @@ else:
 
     trials_kinem = detectar_trials(tempo_flexao_kinem, flexao_kinem, prominence, distance_s) if flexao_kinem is not None else []
     trials_celular = detectar_trials(tempo_flexao_celular, flexao_celular, prominence, distance_s) if flexao_celular is not None else []
+
+    # --- Calibração funcional (pose de referência com ângulo conhecido, ambos os dispositivos) ---
+    offset_calibracao = 0.0
+    offset_calibracao_kinem = 0.0
+    if trials_celular or trials_kinem:
+        st.subheader("🎯 Calibração funcional")
+        st.caption(
+            "Um trial em que o ângulo real era conhecido (pose de "
+            "referência) permite corrigir a escala absoluta dos dois "
+            "dispositivos — sem isso, os valores só são confiáveis em "
+            "termos relativos (consistência entre trials), não em "
+            "graus absolutos."
+        )
+        cal1, cal2 = st.columns(2)
+        opcoes_cal = [f"Trial {t['trial']}" for t in (trials_celular or trials_kinem)]
+        indice_padrao_cal = 1 if len(opcoes_cal) > 1 else 0  # Trial 2 por padrão
+        trial_calibracao = cal1.selectbox("Trial de calibração", opcoes_cal, index=indice_padrao_cal)
+        angulo_conhecido = cal2.number_input("Ângulo real conhecido nesse trial (°)", value=90.0, step=1.0)
+
+        num_trial_cal = int(trial_calibracao.replace("Trial ", ""))
+
+        if trials_celular:
+            pico_bruto_cal = next((t["pico"] for t in trials_celular if t["trial"] == num_trial_cal), None)
+            if pico_bruto_cal is not None:
+                offset_calibracao = angulo_conhecido - pico_bruto_cal
+                st.success(
+                    f"Celular: offset = {angulo_conhecido:.1f}° − {pico_bruto_cal:.1f}° (bruto) "
+                    f"= **{offset_calibracao:+.1f}°**"
+                )
+
+        if trials_kinem:
+            pico_bruto_cal_k = next((t["pico"] for t in trials_kinem if t["trial"] == num_trial_cal), None)
+            if pico_bruto_cal_k is not None:
+                offset_calibracao_kinem = angulo_conhecido - pico_bruto_cal_k
+                st.success(
+                    f"Kinem: offset = {angulo_conhecido:.1f}° − {pico_bruto_cal_k:.1f}° (bruto) "
+                    f"= **{offset_calibracao_kinem:+.1f}°**"
+                )
+
+    flexao_celular_bruta = flexao_celular
+    flexao_celular = flexao_celular + offset_calibracao if flexao_celular is not None else None
+    for t in trials_celular:
+        t["pico_bruto"] = t["pico"]
+        t["pico"] = t["pico"] + offset_calibracao
+        t["sinal"] = t["sinal"] + offset_calibracao
+        t["sinal_ext"] = t["sinal_ext"] + offset_calibracao
+
+    flexao_kinem_bruta = flexao_kinem
+    flexao_kinem = flexao_kinem + offset_calibracao_kinem if flexao_kinem is not None else None
+    for t in trials_kinem:
+        t["pico_bruto"] = t["pico"]
+        t["pico"] = t["pico"] + offset_calibracao_kinem
+        t["sinal"] = t["sinal"] + offset_calibracao_kinem
+        t["sinal_ext"] = t["sinal_ext"] + offset_calibracao_kinem
 
     # --- 1) Visualização: cortar/alinhar o início do registro ---
     st.subheader("Visualização")
@@ -596,11 +649,16 @@ else:
         janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=10.0, min_value=0.5, step=0.5)
         janela_depois = jc2.number_input("até (s depois do pico)", value=10.0, min_value=0.5, step=0.5)
         alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
+        janela_antes_trial1 = st.number_input(
+            "Janela extra só para o Trial 1 (s antes do pico)", value=20.0, min_value=janela_antes, step=1.0,
+            help="O Trial 1 costuma ficar perto de outro trial — aumente aqui pra ver mais contexto antes do pico dele, sem mudar a janela dos demais.",
+        )
 
-        def preparar_curva(t):
+        def preparar_curva(t, janela_antes_custom=None):
             tempo_rel = t["tempo_rel_ext"]
             sinal = t["sinal_ext"]
-            mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
+            ja = janela_antes_custom if janela_antes_custom is not None else janela_antes
+            mask_janela = (tempo_rel >= -ja) & (tempo_rel <= janela_depois)
             tempo_w = tempo_rel[mask_janela]
             sinal_w = sinal[mask_janela]
             if alinhar_zero_y and len(sinal_w) > 0:
@@ -612,9 +670,19 @@ else:
         with col_ck:
             if trials_kinem_f:
                 fig_k = go.Figure()
+                trials_numeros_k = {t["trial"] for t in trials_kinem_f}
+                trial1_k = next((t for t in trials_kinem if t["trial"] == 1), None)
+                if trial1_k is not None and 1 not in trials_numeros_k:
+                    tempo_w, sinal_w = preparar_curva(trial1_k, janela_antes_trial1)
+                    fig_k.add_trace(go.Scatter(
+                        x=tempo_w, y=sinal_w, mode="lines",
+                        name="Trial 1 (excluído da análise)",
+                        line=dict(width=2, dash="dash", color="gray"),
+                    ))
                 for t in trials_kinem_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_k
-                    tempo_w, sinal_w = preparar_curva(t)
+                    ja_custom = janela_antes_trial1 if t["trial"] == 1 else None
+                    tempo_w, sinal_w = preparar_curva(t, ja_custom)
                     fig_k.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
@@ -629,9 +697,19 @@ else:
         with col_cc:
             if trials_celular_f:
                 fig_c = go.Figure()
+                trials_numeros_c = {t["trial"] for t in trials_celular_f}
+                trial1_c = next((t for t in trials_celular if t["trial"] == 1), None)
+                if trial1_c is not None and 1 not in trials_numeros_c:
+                    tempo_w, sinal_w = preparar_curva(trial1_c, janela_antes_trial1)
+                    fig_c.add_trace(go.Scatter(
+                        x=tempo_w, y=sinal_w, mode="lines",
+                        name="Trial 1 (excluído da análise)",
+                        line=dict(width=2, dash="dash", color="gray"),
+                    ))
                 for t in trials_celular_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_c
-                    tempo_w, sinal_w = preparar_curva(t)
+                    ja_custom = janela_antes_trial1 if t["trial"] == 1 else None
+                    tempo_w, sinal_w = preparar_curva(t, ja_custom)
                     fig_c.add_trace(go.Scatter(
                         x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
