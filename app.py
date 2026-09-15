@@ -207,12 +207,15 @@ def calcular_flexao_celular(tempo_braco, tilt_braco, tempo_punho, tilt_punho):
     return grade, flexao
 
 
-def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
+def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0, margem_extra_s=20.0):
     """Detecta cada 'trial' (repetição) como um pico do sinal, separando
     os trials pelos pontos médios entre picos consecutivos. Para cada
-    trial calcula o pico, a ADM (máx - mín dentro do trial) e guarda o
-    próprio trecho do sinal (tempo relativo ao pico) para permitir
-    plotar a curva completa de cada trial, não só o valor de pico."""
+    trial calcula o pico e a ADM (máx - mín) usando o recorte natural
+    (limitado pelos trials vizinhos). Além disso guarda uma janela mais
+    ampla ao redor do pico (até `margem_extra_s`, limitada apenas pelo
+    início/fim do sinal completo, não pelos vizinhos) para permitir
+    visualizar mais contexto de cada trial, mesmo quando ele está perto
+    de outro."""
     tempo = np.asarray(tempo, dtype=float)
     sinal = np.asarray(sinal, dtype=float)
     dt = np.median(np.diff(tempo))
@@ -221,11 +224,18 @@ def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
     if len(picos) == 0:
         return []
     limites = [0] + [int((picos[i] + picos[i + 1]) / 2) for i in range(len(picos) - 1)] + [len(sinal) - 1]
+    margem_amostras = int(margem_extra_s / dt)
     trials = []
     for i, p in enumerate(picos):
         ini, fim = limites[i], limites[i + 1]
         segmento = sinal[ini:fim + 1]
         tempo_segmento = tempo[ini:fim + 1]
+
+        ini_ext = max(0, p - margem_amostras)
+        fim_ext = min(len(sinal) - 1, p + margem_amostras)
+        segmento_ext = sinal[ini_ext:fim_ext + 1]
+        tempo_ext = tempo[ini_ext:fim_ext + 1]
+
         trials.append({
             "trial": i + 1,
             "tempo_pico": float(tempo[p]),
@@ -233,6 +243,8 @@ def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
             "adm": float(segmento.max() - segmento.min()),
             "tempo_rel": tempo_segmento - tempo[p],
             "sinal": segmento,
+            "tempo_rel_ext": tempo_ext - tempo[p],
+            "sinal_ext": segmento_ext,
         })
     return trials
 
@@ -586,8 +598,8 @@ else:
         alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
 
         def preparar_curva(t):
-            tempo_rel = t["tempo_rel"]
-            sinal = t["sinal"]
+            tempo_rel = t["tempo_rel_ext"]
+            sinal = t["sinal_ext"]
             mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
             tempo_w = tempo_rel[mask_janela]
             sinal_w = sinal[mask_janela]
