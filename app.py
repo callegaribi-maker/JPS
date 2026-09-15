@@ -4,6 +4,11 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.signal import find_peaks
 import io
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.patches import Arc
 
 st.set_page_config(page_title="Visualizador de Dados", layout="wide")
 
@@ -465,6 +470,138 @@ def recortar_trial_sem_sobreposicao(trial, trials_incluidos_ordenados, tempo_com
     return tempo_segmento - tempo_completo[idx_atual], segmento
 
 
+def gerar_figura_resumo(titulo, subtitulo, nomes_trials, kinem_valores, celular_valores,
+                         angulo_icone, n_amostra, diferenca_media, angulo_calibracao=None):
+    """Monta a figura de resumo (ícone do cotovelo + gráfico de barras +
+    cards de estatísticas) pronta para apresentação, e devolve um buffer
+    PNG em memória."""
+    AZUL, VERMELHO = "#2563EB", "#DC2626"
+    CINZA_ESCURO, CINZA_MEDIO, CINZA_CLARO = "#1E293B", "#64748B", "#F1F5F9"
+    VERDE, FUNDO = "#16A34A", "#FFFFFF"
+
+    fig = plt.figure(figsize=(13, 7.5), dpi=200, facecolor=FUNDO)
+    gs = fig.add_gridspec(
+        3, 3,
+        width_ratios=[1.05, 1.6, 1.6],
+        height_ratios=[0.55, 2.0, 0.62],
+        hspace=0.55, wspace=0.28,
+        left=0.045, right=0.975, top=0.93, bottom=0.07,
+    )
+
+    ax_title = fig.add_subplot(gs[0, :])
+    ax_title.axis("off")
+    ax_title.text(0.0, 0.8, titulo, fontsize=19, fontweight="bold", color=CINZA_ESCURO,
+                   ha="left", va="center", transform=ax_title.transAxes)
+    ax_title.text(0.0, 0.25, subtitulo, fontsize=12, color=CINZA_MEDIO,
+                   ha="left", va="center", transform=ax_title.transAxes)
+
+    ax_icone = fig.add_subplot(gs[1, 0])
+    ax_icone.set_xlim(0, 10)
+    ax_icone.set_ylim(-1.5, 10)
+    ax_icone.axis("off")
+    ax_icone.set_aspect("equal")
+
+    ombro_orig = np.array([2.3, 8.3])
+    cotovelo_orig = np.array([2.9, 3.6])
+    comprimento_antebraco = 5.6
+    vetor_braco = ombro_orig - cotovelo_orig
+    vetor_braco_unit = vetor_braco / np.linalg.norm(vetor_braco)
+    # Ângulo medido diretamente entre a linha do braço (preta) e a do
+    # antebraço (azul): giramos o próprio vetor do braço por esse ângulo.
+    theta = np.radians(angulo_icone)
+    rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    vetor_antebraco = rot @ vetor_braco_unit
+    punho_orig = cotovelo_orig + comprimento_antebraco * vetor_antebraco
+
+    # Espelha o desenho inteiro (braço para o outro lado), mantendo a geometria correta
+    def espelhar(p):
+        return np.array([10 - p[0], p[1]])
+
+    ombro = espelhar(ombro_orig)
+    cotovelo = espelhar(cotovelo_orig)
+    punho = espelhar(punho_orig)
+    vetor_braco_unit = (ombro - cotovelo) / np.linalg.norm(ombro - cotovelo)
+    vetor_antebraco = (punho - cotovelo) / np.linalg.norm(punho - cotovelo)
+
+    for p1, p2, cor in [(ombro, cotovelo, CINZA_ESCURO), (cotovelo, punho, AZUL)]:
+        ax_icone.plot([p1[0], p2[0]], [p1[1], p2[1]], color=cor, lw=9, solid_capstyle="round", zorder=3)
+        ax_icone.plot([p1[0], p2[0]], [p1[1], p2[1]], color="white", lw=2.4, solid_capstyle="round", zorder=4, alpha=0.25)
+    for p, r, cor in [(ombro, 0.42, CINZA_ESCURO), (cotovelo, 0.5, VERDE), (punho, 0.36, AZUL)]:
+        ax_icone.add_patch(plt.Circle(p, r, color=cor, zorder=5, ec="white", lw=2.2))
+
+    raio_arco = 1.7
+    ang_braco_deg = np.degrees(np.arctan2(vetor_braco_unit[1], vetor_braco_unit[0]))
+    ang_antebraco_deg = np.degrees(np.arctan2(vetor_antebraco[1], vetor_antebraco[0]))
+    arco = Arc(cotovelo, raio_arco * 2, raio_arco * 2,
+               theta1=min(ang_antebraco_deg, ang_braco_deg), theta2=max(ang_antebraco_deg, ang_braco_deg),
+               color=VERDE, lw=3, zorder=2)
+    ax_icone.add_patch(arco)
+
+    ponto_meio_ang = np.radians((ang_braco_deg + ang_antebraco_deg) / 2)
+    pos_label = cotovelo + (raio_arco + 0.75) * np.array([np.cos(ponto_meio_ang), np.sin(ponto_meio_ang)])
+    ax_icone.text(pos_label[0], pos_label[1], f"{angulo_icone}°", fontsize=15, fontweight="bold",
+                  color=VERDE, ha="center", va="center", zorder=6)
+
+    ax_icone.text(ombro[0] + 0.35, ombro[1] + 0.55, "Ombro", fontsize=10.5, color=CINZA_MEDIO, ha="center")
+    ax_icone.text(cotovelo[0] - 1.15, cotovelo[1] - 0.15, "Cotovelo", fontsize=10.5, color=CINZA_MEDIO, ha="right")
+    ax_icone.text(punho[0] - 0.25, punho[1] - 0.45, "Punho", fontsize=10.5, color=CINZA_MEDIO, ha="right")
+    ax_icone.text(8.5, -1.35, "Ângulo de flexão do cotovelo", fontsize=11, fontweight="bold",
+                  color=CINZA_ESCURO, ha="right", va="bottom")
+
+    ax_bar = fig.add_subplot(gs[1, 1:])
+    x = np.arange(len(nomes_trials))
+    largura = 0.34
+    barras_k = ax_bar.bar(x - largura/2, kinem_valores, largura, label="Kinem (referência)",
+                           color=AZUL, edgecolor="white", linewidth=0.6, zorder=3)
+    barras_c = ax_bar.bar(x + largura/2, celular_valores, largura, label="Smartphone (calibrado)",
+                           color=VERMELHO, edgecolor="white", linewidth=0.6, zorder=3)
+    for barras in (barras_k, barras_c):
+        for b in barras:
+            altura = b.get_height()
+            ax_bar.text(b.get_x() + b.get_width()/2, altura + 0.9, f"{altura:.1f}°",
+                        ha="center", va="bottom", fontsize=9.5, color=CINZA_ESCURO)
+
+    valor_max = max(list(kinem_valores) + list(celular_valores)) if kinem_valores or celular_valores else 100
+    ax_bar.set_ylim(0, valor_max * 1.18)
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(nomes_trials, fontsize=10.5, color=CINZA_ESCURO)
+    ax_bar.tick_params(axis="x", pad=8)
+    ax_bar.set_ylabel("Ângulo de pico (°)", fontsize=11.5, color=CINZA_ESCURO)
+    ax_bar.set_title("Concordância entre instrumentos, por repetição", fontsize=13.5,
+                      fontweight="bold", color=CINZA_ESCURO, pad=12, loc="left")
+    ax_bar.spines[["top", "right"]].set_visible(False)
+    ax_bar.spines[["left", "bottom"]].set_color(CINZA_MEDIO)
+    ax_bar.tick_params(colors=CINZA_MEDIO)
+    ax_bar.yaxis.grid(True, color=CINZA_CLARO, zorder=0)
+    ax_bar.set_axisbelow(True)
+    ax_bar.legend(loc="upper left", frameon=False, fontsize=10.5, ncol=2, bbox_to_anchor=(0.0, 1.02))
+
+    stats = [
+        (f"{n_amostra}", "sujeitos pareados\n(α=0,05 · poder=80%)", CINZA_ESCURO),
+        (f"{diferenca_media:.1f}°", "diferença média\nKinem × smartphone", VERDE),
+    ]
+    if angulo_calibracao is not None:
+        stats.append((f"{angulo_calibracao:.0f}°", "pose de referência\nda calibração funcional", AZUL))
+    n_cols = len(stats)
+    for i, (valor, legenda, cor) in enumerate(stats):
+        ax = fig.add_subplot(gs[2, i] if n_cols == 3 else gs[2, i*3//n_cols:(i+1)*3//n_cols])
+        ax.axis("off")
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (0.03, 0.08), 0.94, 0.86, boxstyle="round,pad=0.02,rounding_size=0.08",
+            facecolor=CINZA_CLARO, edgecolor="none", transform=ax.transAxes, zorder=1,
+        ))
+        ax.text(0.5, 0.62, valor, fontsize=26, fontweight="bold", color=cor,
+                ha="center", va="center", transform=ax.transAxes, zorder=2)
+        ax.text(0.5, 0.24, legenda, fontsize=10, color=CINZA_MEDIO,
+                ha="center", va="center", transform=ax.transAxes, zorder=2, linespacing=1.4)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=200, facecolor=FUNDO, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
 
 flexao_kinem = None
@@ -884,3 +1021,47 @@ else:
         alpha_precisao = pc3b.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_precisao")
         n_precisao = amostra_precisao_media(sigma_input2, margem_input, alpha_precisao)
         st.success(f"**N ≈ {int(np.ceil(n_precisao))} pessoas**")
+
+    # --- 5) Figura resumo para apresentação ---
+    st.header("🖼️ Figura resumo para apresentação")
+    st.caption(
+        "Gera uma figura pronta (PNG em alta resolução) com um ícone do "
+        "ângulo de flexão do cotovelo, o gráfico de concordância entre "
+        "os trials incluídos e os números-chave do estudo."
+    )
+
+    fc1, fc2 = st.columns(2)
+    titulo_figura = fc1.text_input("Título", value="Validação de Smartphone para Mensuração da Flexão do Cotovelo")
+    subtitulo_figura = fc2.text_input("Subtítulo", value="Comparação com sistema de captura de movimento (Kinem®) após calibração funcional")
+    angulo_icone = st.slider("Ângulo mostrado no ícone (ilustrativo)", min_value=10, max_value=150, value=35, step=5)
+
+    if st.button("🎨 Gerar figura"):
+        nums_comuns_fig = sorted(set(t["trial"] for t in trials_kinem_f) & set(t["trial"] for t in trials_celular_f))
+        if len(nums_comuns_fig) == 0:
+            st.warning("Não há trials em comum entre Kinem e Celular (ambos incluídos) para montar o gráfico.")
+        else:
+            picos_k_map_fig = {t["trial"]: t["pico"] for t in trials_kinem_f}
+            picos_c_map_fig = {t["trial"]: t["pico"] for t in trials_celular_f}
+            nomes_trials_fig = [f"Trial {n}" + (" (ref.)" if f"Trial {n}" == ref_idx_k else "") for n in nums_comuns_fig]
+            kinem_fig = [picos_k_map_fig[n] for n in nums_comuns_fig]
+            celular_fig = [picos_c_map_fig[n] for n in nums_comuns_fig]
+            diferenca_media_fig = float(np.mean([abs(k - c) for k, c in zip(kinem_fig, celular_fig)]))
+
+            buf = gerar_figura_resumo(
+                titulo=titulo_figura,
+                subtitulo=subtitulo_figura,
+                nomes_trials=nomes_trials_fig,
+                kinem_valores=kinem_fig,
+                celular_valores=celular_fig,
+                angulo_icone=angulo_icone,
+                n_amostra=n_alvo_exemplo,
+                diferenca_media=diferenca_media_fig,
+                angulo_calibracao=angulo_conhecido if "angulo_conhecido" in dir() else None,
+            )
+            st.image(buf, use_container_width=True)
+            st.download_button(
+                "⬇️ Baixar figura (PNG)",
+                data=buf,
+                file_name="figura_resumo_apresentacao.png",
+                mime="image/png",
+            )
