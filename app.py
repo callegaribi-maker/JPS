@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.signal import find_peaks
 import io
 
 st.set_page_config(page_title="Visualizador de Dados", layout="wide")
@@ -158,6 +159,89 @@ def calcular_angulo_segmento(df, marcador_a, marcador_b, eixo_vertical="Y"):
     cos_angulo = vetor_unit @ vertical
     angulo = np.degrees(np.arccos(np.clip(cos_angulo, -1, 1)))
     return angulo
+
+
+def calcular_flexao_cotovelo_kinem(df):
+    """Ângulo de flexão do cotovelo (graus) a partir dos 3 marcadores do
+    Kinem: 0° = extensão total, valores maiores = mais flexão."""
+    cols_ombro = ["Acrômio dir. X", "Acrômio dir. Y", "Acrômio dir. Z"]
+    cols_cotovelo = ["Epicôndilo lateral dir. X", "Epicôndilo lateral dir. Y", "Epicôndilo lateral dir. Z"]
+    cols_punho = ["Medial do punho dir. X", "Medial do punho dir. Y", "Medial do punho dir. Z"]
+    if not all(c in df.columns for c in cols_ombro + cols_cotovelo + cols_punho):
+        return None
+    ombro = df[cols_ombro].values
+    cotovelo = df[cols_cotovelo].values
+    punho = df[cols_punho].values
+    v1 = ombro - cotovelo
+    v2 = punho - cotovelo
+    norma1 = np.linalg.norm(v1, axis=1)
+    norma2 = np.linalg.norm(v2, axis=1)
+    cos_ang = np.sum(v1 * v2, axis=1) / (norma1 * norma2)
+    angulo_entre = np.degrees(np.arccos(np.clip(cos_ang, -1, 1)))
+    return 180.0 - angulo_entre
+
+
+def calcular_tilt_celular(df):
+    """Inclinação (graus) do eixo Y do celular em relação à vertical,
+    a partir do acelerômetro (aproximação quase-estática)."""
+    if not all(c in df.columns for c in ["X", "Y", "Z"]):
+        return None
+    v = df[["X", "Y", "Z"]].values
+    mag = np.linalg.norm(v, axis=1)
+    cos_a = v[:, 1] / mag
+    return np.degrees(np.arccos(np.clip(cos_a, -1, 1)))
+
+
+def calcular_flexao_celular(tempo_braco, tilt_braco, tempo_punho, tilt_punho):
+    """Estima a flexão do cotovelo pelos celulares como a diferença entre
+    a inclinação do celular do braço e do punho, numa grade de tempo
+    comum (após sincronização)."""
+    t0 = max(tempo_braco.min(), tempo_punho.min())
+    t1 = min(tempo_braco.max(), tempo_punho.max())
+    if t1 <= t0:
+        return None, None
+    grade = np.arange(t0, t1, 0.02)
+    tilt_braco_i = np.interp(grade, tempo_braco, tilt_braco)
+    tilt_punho_i = np.interp(grade, tempo_punho, tilt_punho)
+    flexao = np.abs(tilt_braco_i - tilt_punho_i)
+    return grade, flexao
+
+
+def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
+    """Detecta cada 'trial' (repetição) como um pico do sinal, separando
+    os trials pelos pontos médios entre picos consecutivos. Para cada
+    trial calcula o pico e a ADM (amplitude = máx - mín dentro do trial)."""
+    tempo = np.asarray(tempo, dtype=float)
+    sinal = np.asarray(sinal, dtype=float)
+    dt = np.median(np.diff(tempo))
+    distance = max(1, int(distance_s / dt))
+    picos, _ = find_peaks(sinal, prominence=prominence, distance=distance)
+    if len(picos) == 0:
+        return []
+    limites = [0] + [int((picos[i] + picos[i + 1]) / 2) for i in range(len(picos) - 1)] + [len(sinal) - 1]
+    trials = []
+    for i, p in enumerate(picos):
+        ini, fim = limites[i], limites[i + 1]
+        segmento = sinal[ini:fim + 1]
+        trials.append({
+            "trial": i + 1,
+            "tempo_pico": float(tempo[p]),
+            "pico": float(sinal[p]),
+            "adm": float(segmento.max() - segmento.min()),
+        })
+    return trials
+
+
+def calcular_erros(trials, indice_referencia=0):
+    """Adiciona erro absoluto e relativo de cada trial em relação ao
+    trial de referência (por padrão, o primeiro)."""
+    if not trials:
+        return trials
+    pico_ref = trials[indice_referencia]["pico"]
+    for t in trials:
+        t["erro_abs"] = abs(t["pico"] - pico_ref)
+        t["erro_rel_pct"] = (t["erro_abs"] / abs(pico_ref) * 100) if pico_ref != 0 else float("nan")
+    return trials
 
 
 # --- Upload único, com múltiplos arquivos de uma vez ---
@@ -472,3 +556,92 @@ if "pico_referencia" in st.session_state:
     )
 
 st.plotly_chart(fig, use_container_width=True)
+
+# --- Ângulo de flexão do cotovelo: trials, ADM e erro vs trial 1 ---
+st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
+
+flexao_kinem = None
+tempo_flexao_kinem = None
+if "Kinem" in dataframes:
+    flexao_kinem = calcular_flexao_cotovelo_kinem(dataframes["Kinem"])
+    if flexao_kinem is not None:
+        tempo_flexao_kinem = tempo_seg_por_fonte["Kinem"].values
+
+flexao_celular = None
+tempo_flexao_celular = None
+if "Braço - Acelerômetro" in dataframes and "Punho - Acelerômetro" in dataframes:
+    tilt_braco = calcular_tilt_celular(dataframes["Braço - Acelerômetro"])
+    tilt_punho = calcular_tilt_celular(dataframes["Punho - Acelerômetro"])
+    if tilt_braco is not None and tilt_punho is not None:
+        t_braco_sync = tempo_ajustado("Braço - Acelerômetro").values
+        t_punho_sync = tempo_ajustado("Punho - Acelerômetro").values
+        tempo_flexao_celular, flexao_celular = calcular_flexao_celular(
+            t_braco_sync, tilt_braco, t_punho_sync, tilt_punho
+        )
+
+if flexao_kinem is None and flexao_celular is None:
+    st.info("Não foi possível calcular o ângulo de flexão (verifique se os arquivos certos foram enviados).")
+else:
+    st.caption(
+        "Kinem: ângulo articular real (0° = extensão total). Celular: "
+        "estimativa pela diferença de inclinação entre o celular do "
+        "Braço e o do Punho — é uma aproximação, não o mesmo cálculo do "
+        "Kinem, então compare a *consistência entre trials* de cada "
+        "dispositivo, não o valor absoluto entre eles."
+    )
+
+    pc1, pc2 = st.columns(2)
+    prominence = pc1.number_input("Sensibilidade do pico (prominence, °)", value=15.0, step=1.0, min_value=1.0)
+    distance_s = pc2.number_input("Distância mínima entre trials (s)", value=3.0, step=0.5, min_value=0.5)
+
+    trials_kinem = detectar_trials(tempo_flexao_kinem, flexao_kinem, prominence, distance_s) if flexao_kinem is not None else []
+    trials_celular = detectar_trials(tempo_flexao_celular, flexao_celular, prominence, distance_s) if flexao_celular is not None else []
+
+    col_k, col_c = st.columns(2)
+
+    with col_k:
+        st.subheader("Kinem")
+        if trials_kinem:
+            opcoes_trial = [f"Trial {t['trial']}" for t in trials_kinem]
+            ref_idx_k = st.selectbox("Trial de referência", opcoes_trial, index=0, key="ref_kinem")
+            idx_k = opcoes_trial.index(ref_idx_k)
+            trials_kinem = calcular_erros(trials_kinem, idx_k)
+            df_trials_k = pd.DataFrame(trials_kinem)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
+            df_trials_k.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
+            st.dataframe(df_trials_k.round(2), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
+
+    with col_c:
+        st.subheader("Celular (estimado)")
+        if trials_celular:
+            opcoes_trial_c = [f"Trial {t['trial']}" for t in trials_celular]
+            ref_idx_c = st.selectbox("Trial de referência", opcoes_trial_c, index=0, key="ref_celular")
+            idx_c = opcoes_trial_c.index(ref_idx_c)
+            trials_celular = calcular_erros(trials_celular, idx_c)
+            df_trials_c = pd.DataFrame(trials_celular)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
+            df_trials_c.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
+            st.dataframe(df_trials_c.round(2), use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
+
+    if trials_kinem or trials_celular:
+        fig_trials = go.Figure()
+        if trials_kinem:
+            fig_trials.add_trace(go.Scatter(
+                x=[t["trial"] for t in trials_kinem],
+                y=[t["pico"] for t in trials_kinem],
+                mode="lines+markers", name="Kinem",
+            ))
+        if trials_celular:
+            fig_trials.add_trace(go.Scatter(
+                x=[t["trial"] for t in trials_celular],
+                y=[t["pico"] for t in trials_celular],
+                mode="lines+markers", name="Celular (estimado)",
+            ))
+        fig_trials.update_layout(
+            title="Ângulo de pico por trial",
+            xaxis_title="Trial", yaxis_title="Ângulo de pico (°)",
+            height=350,
+        )
+        st.plotly_chart(fig_trials, use_container_width=True)
