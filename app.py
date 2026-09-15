@@ -366,6 +366,16 @@ if "Kinem" in dataframes:
 
 offsets = {"Braço": braco_offset, "Punho": punho_offset}
 
+with st.expander("🔧 Ajuste fino de sincronização (opcional)"):
+    st.caption(
+        "Os valores abaixo vêm da detecção automática. Se as curvas do "
+        "Kinem e do celular não estiverem alinhadas no gráfico, ajuste "
+        "manualmente aqui até os picos coincidirem."
+    )
+    aj1, aj2 = st.columns(2)
+    offsets["Braço"] = aj1.number_input("Deslocamento — Braço (s)", value=float(offsets["Braço"]), step=0.1, format="%.2f")
+    offsets["Punho"] = aj2.number_input("Deslocamento — Punho (s)", value=float(offsets["Punho"]), step=0.1, format="%.2f")
+
 
 def tempo_ajustado(fonte):
     grupo = grupo_dispositivo(fonte)
