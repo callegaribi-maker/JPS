@@ -210,7 +210,9 @@ def calcular_flexao_celular(tempo_braco, tilt_braco, tempo_punho, tilt_punho):
 def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
     """Detecta cada 'trial' (repetição) como um pico do sinal, separando
     os trials pelos pontos médios entre picos consecutivos. Para cada
-    trial calcula o pico e a ADM (amplitude = máx - mín dentro do trial)."""
+    trial calcula o pico, a ADM (máx - mín dentro do trial) e guarda o
+    próprio trecho do sinal (tempo relativo ao pico) para permitir
+    plotar a curva completa de cada trial, não só o valor de pico."""
     tempo = np.asarray(tempo, dtype=float)
     sinal = np.asarray(sinal, dtype=float)
     dt = np.median(np.diff(tempo))
@@ -223,11 +225,14 @@ def detectar_trials(tempo, sinal, prominence=15.0, distance_s=3.0):
     for i, p in enumerate(picos):
         ini, fim = limites[i], limites[i + 1]
         segmento = sinal[ini:fim + 1]
+        tempo_segmento = tempo[ini:fim + 1]
         trials.append({
             "trial": i + 1,
             "tempo_pico": float(tempo[p]),
             "pico": float(sinal[p]),
             "adm": float(segmento.max() - segmento.min()),
+            "tempo_rel": tempo_segmento - tempo[p],
+            "sinal": segmento,
         })
     return trials
 
@@ -602,41 +607,67 @@ else:
     with col_k:
         st.subheader("Kinem")
         if trials_kinem:
-            opcoes_trial = [f"Trial {t['trial']}" for t in trials_kinem]
-            ref_idx_k = st.selectbox("Trial de referência", opcoes_trial, index=0, key="ref_kinem")
-            idx_k = opcoes_trial.index(ref_idx_k)
-            trials_kinem = calcular_erros(trials_kinem, idx_k)
-            df_trials_k = pd.DataFrame(trials_kinem)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
-            df_trials_k.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
-            st.dataframe(df_trials_k.round(2), use_container_width=True, hide_index=True)
+            todos_k = [t["trial"] for t in trials_kinem]
+            incluidos_k = st.multiselect(
+                "Trials incluídos na análise",
+                options=todos_k,
+                default=todos_k,
+                key="incluidos_kinem",
+            )
+            trials_kinem_f = [t for t in trials_kinem if t["trial"] in incluidos_k]
+            if trials_kinem_f:
+                opcoes_trial = [f"Trial {t['trial']}" for t in trials_kinem_f]
+                indice_default = 1 if len(opcoes_trial) > 1 else 0
+                ref_idx_k = st.selectbox("Trial de referência", opcoes_trial, index=indice_default, key="ref_kinem")
+                idx_k = opcoes_trial.index(ref_idx_k)
+                trials_kinem_f = calcular_erros(trials_kinem_f, idx_k)
+                df_trials_k = pd.DataFrame(trials_kinem_f)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
+                df_trials_k.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
+                st.dataframe(df_trials_k.round(2), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum trial incluído.")
         else:
+            trials_kinem_f = []
             st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
 
     with col_c:
         st.subheader("Celular (estimado)")
         if trials_celular:
-            opcoes_trial_c = [f"Trial {t['trial']}" for t in trials_celular]
-            ref_idx_c = st.selectbox("Trial de referência", opcoes_trial_c, index=0, key="ref_celular")
-            idx_c = opcoes_trial_c.index(ref_idx_c)
-            trials_celular = calcular_erros(trials_celular, idx_c)
-            df_trials_c = pd.DataFrame(trials_celular)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
-            df_trials_c.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
-            st.dataframe(df_trials_c.round(2), use_container_width=True, hide_index=True)
+            todos_c = [t["trial"] for t in trials_celular]
+            incluidos_c = st.multiselect(
+                "Trials incluídos na análise",
+                options=todos_c,
+                default=todos_c,
+                key="incluidos_celular",
+            )
+            trials_celular_f = [t for t in trials_celular if t["trial"] in incluidos_c]
+            if trials_celular_f:
+                opcoes_trial_c = [f"Trial {t['trial']}" for t in trials_celular_f]
+                indice_default_c = 1 if len(opcoes_trial_c) > 1 else 0
+                ref_idx_c = st.selectbox("Trial de referência", opcoes_trial_c, index=indice_default_c, key="ref_celular")
+                idx_c = opcoes_trial_c.index(ref_idx_c)
+                trials_celular_f = calcular_erros(trials_celular_f, idx_c)
+                df_trials_c = pd.DataFrame(trials_celular_f)[["trial", "tempo_pico", "pico", "adm", "erro_abs", "erro_rel_pct"]]
+                df_trials_c.columns = ["Trial", "t pico (s)", "Pico (°)", "ADM (°)", "Erro abs (°)", "Erro rel (%)"]
+                st.dataframe(df_trials_c.round(2), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum trial incluído.")
         else:
+            trials_celular_f = []
             st.info("Nenhum trial detectado — ajuste a sensibilidade acima.")
 
-    if trials_kinem or trials_celular:
+    if trials_kinem_f or trials_celular_f:
         fig_trials = go.Figure()
-        if trials_kinem:
+        if trials_kinem_f:
             fig_trials.add_trace(go.Scatter(
-                x=[t["trial"] for t in trials_kinem],
-                y=[t["pico"] for t in trials_kinem],
+                x=[t["trial"] for t in trials_kinem_f],
+                y=[t["pico"] for t in trials_kinem_f],
                 mode="lines+markers", name="Kinem",
             ))
-        if trials_celular:
+        if trials_celular_f:
             fig_trials.add_trace(go.Scatter(
-                x=[t["trial"] for t in trials_celular],
-                y=[t["pico"] for t in trials_celular],
+                x=[t["trial"] for t in trials_celular_f],
+                y=[t["pico"] for t in trials_celular_f],
                 mode="lines+markers", name="Celular (estimado)",
             ))
         fig_trials.update_layout(
@@ -645,3 +676,39 @@ else:
             height=350,
         )
         st.plotly_chart(fig_trials, use_container_width=True)
+
+    # --- Curvas completas de cada trial (não só o valor de pico) ---
+    if trials_kinem_f or trials_celular_f:
+        st.subheader("Curvas de ângulo por trial (alinhadas pelo pico)")
+        st.caption(
+            "Cada linha é o registro completo do ângulo durante aquele "
+            "trial, com o tempo centralizado no instante do pico (t=0 "
+            "= pico de flexão)."
+        )
+        col_ck, col_cc = st.columns(2)
+        with col_ck:
+            if trials_kinem_f:
+                fig_k = go.Figure()
+                for t in trials_kinem_f:
+                    fig_k.add_trace(go.Scatter(
+                        x=t["tempo_rel"], y=t["sinal"],
+                        mode="lines", name=f"Trial {t['trial']}",
+                    ))
+                fig_k.update_layout(
+                    title="Kinem", xaxis_title="Tempo relativo ao pico (s)",
+                    yaxis_title="Ângulo (°)", height=400,
+                )
+                st.plotly_chart(fig_k, use_container_width=True)
+        with col_cc:
+            if trials_celular_f:
+                fig_c = go.Figure()
+                for t in trials_celular_f:
+                    fig_c.add_trace(go.Scatter(
+                        x=t["tempo_rel"], y=t["sinal"],
+                        mode="lines", name=f"Trial {t['trial']}",
+                    ))
+                fig_c.update_layout(
+                    title="Celular (estimado)", xaxis_title="Tempo relativo ao pico (s)",
+                    yaxis_title="Ângulo (°)", height=400,
+                )
+                st.plotly_chart(fig_c, use_container_width=True)
