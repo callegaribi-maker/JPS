@@ -550,20 +550,39 @@ else:
             "= pico de flexão). A linha do trial de referência aparece "
             "mais grossa."
         )
+
+        jc1, jc2, jc3 = st.columns(3)
+        janela_antes = jc1.number_input("Mostrar de (s antes do pico)", value=6.0, min_value=0.5, step=0.5)
+        janela_depois = jc2.number_input("até (s depois do pico)", value=6.0, min_value=0.5, step=0.5)
+        alinhar_zero_y = jc3.checkbox("Alinhar todos no zero (Y)", value=True)
+
+        def preparar_curva(t):
+            tempo_rel = t["tempo_rel"]
+            sinal = t["sinal"]
+            mask_janela = (tempo_rel >= -janela_antes) & (tempo_rel <= janela_depois)
+            tempo_w = tempo_rel[mask_janela]
+            sinal_w = sinal[mask_janela]
+            if alinhar_zero_y and len(sinal_w) > 0:
+                baseline = sinal_w[0]
+                sinal_w = sinal_w - baseline
+            return tempo_w, sinal_w
+
         col_ck, col_cc = st.columns(2)
         with col_ck:
             if trials_kinem_f:
                 fig_k = go.Figure()
                 for t in trials_kinem_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_k
+                    tempo_w, sinal_w = preparar_curva(t)
                     fig_k.add_trace(go.Scatter(
-                        x=t["tempo_rel"], y=t["sinal"],
+                        x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
                         line=dict(width=4 if eh_ref else 2),
                     ))
                 fig_k.update_layout(
                     title="Kinem", xaxis_title="Tempo relativo ao pico (s)",
-                    yaxis_title="Ângulo (°)", height=400,
+                    yaxis_title="Ângulo (°)" + (" — relativo à linha de base" if alinhar_zero_y else ""),
+                    height=400,
                 )
                 st.plotly_chart(fig_k, use_container_width=True)
         with col_cc:
@@ -571,14 +590,16 @@ else:
                 fig_c = go.Figure()
                 for t in trials_celular_f:
                     eh_ref = f"Trial {t['trial']}" == ref_idx_c
+                    tempo_w, sinal_w = preparar_curva(t)
                     fig_c.add_trace(go.Scatter(
-                        x=t["tempo_rel"], y=t["sinal"],
+                        x=tempo_w, y=sinal_w,
                         mode="lines", name=f"Trial {t['trial']}" + (" (ref.)" if eh_ref else ""),
                         line=dict(width=4 if eh_ref else 2),
                     ))
                 fig_c.update_layout(
                     title="Celular (estimado)", xaxis_title="Tempo relativo ao pico (s)",
-                    yaxis_title="Ângulo (°)", height=400,
+                    yaxis_title="Ângulo (°)" + (" — relativo à linha de base" if alinhar_zero_y else ""),
+                    height=400,
                 )
                 st.plotly_chart(fig_c, use_container_width=True)
 
@@ -688,7 +709,7 @@ else:
         delta_input = dc2.number_input("Diferença mínima a detectar (°)", value=5.0, min_value=0.1, step=0.5)
         alpha_diff = dc3.number_input("Alfa", value=0.05, min_value=0.01, max_value=0.20, step=0.01, key="alpha_diff")
         power_diff = dc4.number_input("Poder (1-β)", value=0.80, min_value=0.5, max_value=0.99, step=0.05)
-        tipo_teste = st.radio("Tipo de comparação", ["Grupos independentes", "Medidas pareadas (mesma pessoa)"], horizontal=True)
+        tipo_teste = st.selectbox("Tipo de comparação", ["Grupos independentes", "Medidas pareadas (mesma pessoa)"])
         n_diff = amostra_diferenca_minima(sigma_input, delta_input, alpha_diff, power_diff, pareado=(tipo_teste.startswith("Medidas")))
         if tipo_teste.startswith("Medidas"):
             st.success(f"**N ≈ {int(np.ceil(n_diff))} pessoas** (medidas repetidas)")
