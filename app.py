@@ -1022,6 +1022,79 @@ else:
         n_precisao = amostra_precisao_media(sigma_input2, margem_input, alpha_precisao)
         st.success(f"**N ≈ {int(np.ceil(n_precisao))} pessoas**")
 
+    # --- Erro absoluto e relativo dos trials vs. Trial 2 (referência), Kinem x Celular ---
+    st.header("📊 Erro absoluto e relativo vs. Trial 2 (referência)")
+
+    trial2_kinem = next((t for t in trials_kinem if t["trial"] == 2), None)
+    trial2_celular = next((t for t in trials_celular if t["trial"] == 2), None)
+
+    if trial2_kinem is None and trial2_celular is None:
+        st.info("Não encontrei o Trial 2 nos dados para usar como referência.")
+    else:
+        linhas_erro = []
+        outros_k = [t for t in trials_kinem_f if t["trial"] != 2]
+        outros_c = [t for t in trials_celular_f if t["trial"] != 2]
+        nums_erro = sorted(set(t["trial"] for t in outros_k) | set(t["trial"] for t in outros_c))
+
+        for n in nums_erro:
+            linha = {"Trial": n}
+            tk = next((t for t in outros_k if t["trial"] == n), None)
+            tc = next((t for t in outros_c if t["trial"] == n), None)
+            if tk is not None and trial2_kinem is not None:
+                linha["Kinem — pico (°)"] = tk["pico"]
+                linha["Kinem — erro abs (°)"] = abs(tk["pico"] - trial2_kinem["pico"])
+                linha["Kinem — erro rel (%)"] = (linha["Kinem — erro abs (°)"] / abs(trial2_kinem["pico"]) * 100) if trial2_kinem["pico"] != 0 else np.nan
+            if tc is not None and trial2_celular is not None:
+                linha["Celular — pico (°)"] = tc["pico"]
+                linha["Celular — erro abs (°)"] = abs(tc["pico"] - trial2_celular["pico"])
+                linha["Celular — erro rel (%)"] = (linha["Celular — erro abs (°)"] / abs(trial2_celular["pico"]) * 100) if trial2_celular["pico"] != 0 else np.nan
+            linhas_erro.append(linha)
+
+        if not linhas_erro:
+            st.info("Nenhum outro trial incluído além do Trial 2 para comparar.")
+        else:
+            df_erro = pd.DataFrame(linhas_erro).round(2)
+            st.dataframe(df_erro, use_container_width=True, hide_index=True)
+
+            fig_erro_abs = go.Figure()
+            fig_erro_rel = go.Figure()
+            if "Kinem — erro abs (°)" in df_erro.columns:
+                fig_erro_abs.add_trace(go.Bar(
+                    x=[f"Trial {n}" for n in df_erro["Trial"]], y=df_erro["Kinem — erro abs (°)"],
+                    name="Kinem", marker_color="#1f77b4",
+                    text=[f"{v:.2f}°" for v in df_erro["Kinem — erro abs (°)"]], textposition="outside",
+                ))
+                fig_erro_rel.add_trace(go.Bar(
+                    x=[f"Trial {n}" for n in df_erro["Trial"]], y=df_erro["Kinem — erro rel (%)"],
+                    name="Kinem", marker_color="#1f77b4",
+                    text=[f"{v:.1f}%" for v in df_erro["Kinem — erro rel (%)"]], textposition="outside",
+                ))
+            if "Celular — erro abs (°)" in df_erro.columns:
+                fig_erro_abs.add_trace(go.Bar(
+                    x=[f"Trial {n}" for n in df_erro["Trial"]], y=df_erro["Celular — erro abs (°)"],
+                    name="Celular", marker_color="#d62728",
+                    text=[f"{v:.2f}°" for v in df_erro["Celular — erro abs (°)"]], textposition="outside",
+                ))
+                fig_erro_rel.add_trace(go.Bar(
+                    x=[f"Trial {n}" for n in df_erro["Trial"]], y=df_erro["Celular — erro rel (%)"],
+                    name="Celular", marker_color="#d62728",
+                    text=[f"{v:.1f}%" for v in df_erro["Celular — erro rel (%)"]], textposition="outside",
+                ))
+
+            col_ea, col_er = st.columns(2)
+            with col_ea:
+                fig_erro_abs.update_layout(
+                    title="Erro absoluto vs. Trial 2", xaxis_title="Trial", yaxis_title="Erro absoluto (°)",
+                    barmode="group", height=380,
+                )
+                st.plotly_chart(fig_erro_abs, use_container_width=True)
+            with col_er:
+                fig_erro_rel.update_layout(
+                    title="Erro relativo vs. Trial 2", xaxis_title="Trial", yaxis_title="Erro relativo (%)",
+                    barmode="group", height=380,
+                )
+                st.plotly_chart(fig_erro_rel, use_container_width=True)
+
     # --- 5) Figura resumo para apresentação ---
     st.header("🖼️ Figura resumo para apresentação")
     st.caption(
