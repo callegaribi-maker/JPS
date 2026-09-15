@@ -7,12 +7,12 @@ import io
 
 st.set_page_config(page_title="Visualizador de Dados", layout="wide")
 
-st.title("📊 Visualizador de Dados — Kinem x Celulares")
+st.title("🦾 Flexão do Cotovelo — Kinem x Celulares")
 st.write(
     "Arraste os **5 arquivos de uma vez** (1 do Kinem + 4 dos celulares: "
-    "Braço-Acel, Braço-Gyro, Punho-Acel, Punho-Gyro). O app identifica "
-    "cada um automaticamente pelo nome e monta um único gráfico "
-    "sincronizado, com deslocamento, aceleração e giroscópio."
+    "Braço-Acel, Braço-Gyro, Punho-Acel, Punho-Gyro). O app identifica, "
+    "sincroniza e corta artefatos automaticamente, e mostra direto a "
+    "análise de flexão do cotovelo por trial."
 )
 
 CATEGORIAS = [
@@ -297,56 +297,17 @@ if "Kinem" in dataframes:
     if angulo is not None:
         dataframes["Kinem"]["Ângulo antebraço (vertical)"] = angulo
 
-# --- Corte de artefatos no final dos arquivos (ex: quando a câmera do Kinem para) ---
+# --- Corte automático de artefatos no final (silencioso, sem interface) ---
 tempo_col_bruto = {fonte: df.columns[0] for fonte, df in dataframes.items()}
 tempo_seg_bruto = {
     fonte: tempo_em_segundos(tempo_col_bruto[fonte], dataframes[fonte][tempo_col_bruto[fonte]])
     for fonte in dataframes
 }
-
-with st.expander("✂️ Cortar dados no final (remover artefatos)"):
-    st.write(
-        "Se algum arquivo tiver um pico estranho no final (ex: quando a "
-        "câmera do Kinem para de rastrear), defina até que segundo usar "
-        "os dados daquele arquivo — o restante é descartado."
-    )
-    cortes_colunas = st.columns(len(dataframes)) if dataframes else []
-    cortes = {}
-    for col_layout, fonte in zip(cortes_colunas, dataframes.keys()):
-        with col_layout:
-            duracao_total = float(tempo_seg_bruto[fonte].max())
-            sugestao_corte = min(
-                sugerir_corte(dataframes[fonte], tempo_col_bruto[fonte]),
-                duracao_total,
-            )
-            if sugestao_corte < duracao_total:
-                st.caption(f"⚠️ Artefato detectado — corte sugerido: {sugestao_corte:.2f}s")
-            cortes[fonte] = st.number_input(
-                f"{fonte}: usar até (s)",
-                min_value=0.0,
-                max_value=duracao_total,
-                value=sugestao_corte,
-                step=0.5,
-                key=f"corte_{fonte}",
-            )
-
 for fonte in list(dataframes.keys()):
-    mask_corte = tempo_seg_bruto[fonte] <= cortes[fonte]
+    duracao_total = float(tempo_seg_bruto[fonte].max())
+    corte = min(sugerir_corte(dataframes[fonte], tempo_col_bruto[fonte]), duracao_total)
+    mask_corte = tempo_seg_bruto[fonte] <= corte
     dataframes[fonte] = dataframes[fonte][mask_corte].reset_index(drop=True)
-
-with st.expander("📄 Ver dados brutos (opcional)"):
-    abas = st.tabs(list(dataframes.keys()))
-    for aba, (nome, df) in zip(abas, dataframes.items()):
-        with aba:
-            st.dataframe(df, use_container_width=True)
-            csv_bytes = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "⬇️ Baixar como CSV",
-                data=csv_bytes,
-                file_name=f"{nome.replace(' ', '_').replace('(', '').replace(')', '')}.csv",
-                mime="text/csv",
-                key=f"download_{nome}",
-            )
 
 tempo_col_por_fonte = {fonte: df.columns[0] for fonte, df in dataframes.items()}
 tempo_seg_por_fonte = {
@@ -354,78 +315,38 @@ tempo_seg_por_fonte = {
     for fonte in dataframes
 }
 
-# --- Sincronização temporal entre Kinem e celulares ---
-with st.expander("🔄 Sincronização temporal (configuração avançada)"):
-    st.write(
-        "O Kinem e cada celular começam a gravar em momentos diferentes. "
-        "A sincronização é feita automaticamente pelo **pico de aceleração "
-        "do primeiro movimento**, usando a aceleração do Kinem no punho "
-        "como referência fixa."
-    )
+# --- Sincronização temporal automática (silenciosa, sem interface) ---
+JANELA_PADRAO = 15.0  # segundos, usada internamente para achar o 1º pico
 
-    if "braco_offset" not in st.session_state:
-        st.session_state.braco_offset = 0.0
-    if "punho_offset" not in st.session_state:
-        st.session_state.punho_offset = 0.0
+braco_offset, punho_offset = 0.0, 0.0
+pico_referencia = None
 
-    ref_tempo, ref_valor, ref_nome = None, None, None
-    if "Kinem" in dataframes:
-        df_kinem = dataframes["Kinem"]
-        candidatos_acel = [c for c in df_kinem.columns if eh_coluna_acel_abs(c)]
-        col_ref = next((c for c in candidatos_acel if "punho" in c.lower()), None) or (candidatos_acel[0] if candidatos_acel else None)
-        if col_ref:
-            ref_tempo = tempo_seg_por_fonte["Kinem"].values
-            ref_valor = df_kinem[col_ref].values
-            ref_nome = col_ref
-
-    if ref_tempo is not None:
-        st.caption(f"Referência: Kinem — {ref_nome}")
-
-        JANELA_PADRAO = 15.0  # segundos, aplicada internamente para achar o 1º pico
-
-        if st.button("🎯 Sincronizar pelo pico do primeiro movimento"):
-            t_pico_kinem, v_pico_kinem = detectar_pico_primeiro_movimento(
-                ref_tempo, ref_valor, 0.0, JANELA_PADRAO
-            )
-            if t_pico_kinem is None:
-                st.warning("Não encontrei dados do Kinem na janela informada.")
-            else:
-                st.session_state.pico_referencia = t_pico_kinem
-                st.info(f"Pico do Kinem em t = {t_pico_kinem:.2f} s (valor {v_pico_kinem:.2f})")
-                for grupo in ["Braço", "Punho"]:
-                    fonte_acel = f"{grupo} - Acelerômetro"
-                    if fonte_acel in dataframes:
-                        df_acel = dataframes[fonte_acel]
-                        if "Y" in df_acel.columns:
-                            sinal_celular = df_acel["Y"].values
-                        else:
-                            sinal_celular = df_acel[df_acel.columns[-1]].values
-                        t_pico_celular, v_pico_celular = detectar_pico_primeiro_movimento(
-                            tempo_seg_por_fonte[fonte_acel].values, sinal_celular, 0.0, JANELA_PADRAO
-                        )
-                        if t_pico_celular is None:
-                            st.warning(f"{grupo}: não encontrei dados na janela informada.")
-                            continue
+if "Kinem" in dataframes:
+    df_kinem = dataframes["Kinem"]
+    candidatos_acel = [c for c in df_kinem.columns if eh_coluna_acel_abs(c)]
+    col_ref = next((c for c in candidatos_acel if "punho" in c.lower()), None) or (candidatos_acel[0] if candidatos_acel else None)
+    if col_ref:
+        ref_tempo = tempo_seg_por_fonte["Kinem"].values
+        ref_valor = df_kinem[col_ref].values
+        t_pico_kinem, _ = detectar_pico_primeiro_movimento(ref_tempo, ref_valor, 0.0, JANELA_PADRAO)
+        if t_pico_kinem is not None:
+            pico_referencia = t_pico_kinem
+            for grupo in ["Braço", "Punho"]:
+                fonte_acel = f"{grupo} - Acelerômetro"
+                if fonte_acel in dataframes:
+                    df_acel = dataframes[fonte_acel]
+                    sinal_celular = df_acel["Y"].values if "Y" in df_acel.columns else df_acel[df_acel.columns[-1]].values
+                    t_pico_celular, _ = detectar_pico_primeiro_movimento(
+                        tempo_seg_por_fonte[fonte_acel].values, sinal_celular, 0.0, JANELA_PADRAO
+                    )
+                    if t_pico_celular is not None:
                         offset = t_pico_kinem - t_pico_celular
                         if grupo == "Braço":
-                            st.session_state.braco_offset = offset
+                            braco_offset = offset
                         else:
-                            st.session_state.punho_offset = offset
-                        st.success(
-                            f"{grupo}: pico em t = {t_pico_celular:.2f} s (valor {v_pico_celular:.2f}) "
-                            f"→ deslocamento aplicado = {offset:.2f} s"
-                        )
+                            punho_offset = offset
 
-    st.markdown(
-        f"**Deslocamento aplicado** — Braço: `{st.session_state.braco_offset:.2f}s` · "
-        f"Punho: `{st.session_state.punho_offset:.2f}s`"
-    )
-
-if "braco_offset" not in st.session_state:
-    st.session_state.braco_offset = 0.0
-if "punho_offset" not in st.session_state:
-    st.session_state.punho_offset = 0.0
-offsets = {"Braço": st.session_state.braco_offset, "Punho": st.session_state.punho_offset}
+offsets = {"Braço": braco_offset, "Punho": punho_offset}
 
 
 def tempo_ajustado(fonte):
@@ -433,138 +354,6 @@ def tempo_ajustado(fonte):
     offset = offsets.get(grupo, 0.0) if grupo else 0.0
     return tempo_seg_por_fonte[fonte] + offset
 
-
-# --- Gráfico único combinado (3 eixos Y) ---
-with st.expander("📈 Gráfico combinado (configuração avançada)"):
-
-    series_disponiveis = []
-    for fonte, df in dataframes.items():
-        col_tempo = tempo_col_por_fonte[fonte]
-        for col in df.columns:
-            if col == col_tempo:
-                continue
-            series_disponiveis.append((f"{fonte} — {col}", fonte, col))
-
-    rotulos_disponiveis = [s[0] for s in series_disponiveis]
-    mapa_series = {s[0]: (s[1], s[2]) for s in series_disponiveis}
-
-    # Define, para cada série, a que eixo ela pertence por padrão
-    EIXO_DESLOC, EIXO_ACEL, EIXO_GYRO, EIXO_ANGULO = "y1", "y2", "y3", "y4"
-
-    def eixo_padrao(fonte, col):
-        if fonte == "Kinem":
-            if "Ângulo" in col:
-                return EIXO_ANGULO
-            if eh_coluna_posicao_y(col):
-                return EIXO_DESLOC
-            if eh_coluna_acel_y(col):
-                return EIXO_ACEL
-        if "Acelerômetro" in fonte and col.strip() == "Y":
-            return EIXO_ACEL
-        if "Giroscópio" in fonte and col.strip() == "Y":
-            return EIXO_GYRO
-        return None
-
-    sugestao_default = []
-    for rotulo, fonte, col in series_disponiveis:
-        if fonte == "Kinem" and "Ângulo" in col:
-            sugestao_default.append(rotulo)
-        elif "Acelerômetro" in fonte and col.strip() == "Y":
-            sugestao_default.append(rotulo)
-
-    selecionadas = st.multiselect(
-        "Séries no gráfico",
-        options=rotulos_disponiveis,
-        default=sugestao_default,
-    )
-
-    if not selecionadas:
-        st.info("Selecione ao menos uma série para plotar.")
-    else:
-        zoom_no_pico = False
-        if "pico_referencia" in st.session_state:
-            zoom_no_pico = st.checkbox(
-                f"🔍 Dar zoom perto do pico de referência (t = {st.session_state.pico_referencia:.2f} s)",
-                value=False,
-            )
-
-        st.markdown("**Janela de tempo mostrada no gráfico**")
-        jw1, jw2 = st.columns(2)
-        janela_ini = jw1.number_input("Ver de (s)", value=0.0, step=1.0, key="janela_ini")
-        janela_fim = jw2.number_input("até (s)", value=20.0, step=1.0, key="janela_fim")
-
-        CORES = {
-            EIXO_DESLOC: "#1f77b4",
-            EIXO_ACEL: "#d62728",
-            EIXO_GYRO: "#2ca02c",
-            EIXO_ANGULO: "#9467bd",
-        }
-
-        fig = go.Figure()
-        eixos_usados = set()
-        for rotulo in selecionadas:
-            fonte, col = mapa_series[rotulo]
-            eixo = eixo_padrao(fonte, col) or EIXO_ACEL
-            eixos_usados.add(eixo)
-            df = dataframes[fonte]
-            x = tempo_ajustado(fonte)
-            fig.add_trace(
-                go.Scatter(
-                    x=x, y=df[col], mode="lines", name=rotulo,
-                    yaxis=eixo,
-                )
-            )
-
-        layout_kwargs = dict(
-            height=600,
-            xaxis=dict(title="Tempo (s, sincronizado)", domain=[0.0, 0.85]),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        )
-
-        if zoom_no_pico and "pico_referencia" in st.session_state:
-            t_ref = st.session_state.pico_referencia
-            layout_kwargs["xaxis"]["range"] = [t_ref - 5, t_ref + 5]
-        else:
-            layout_kwargs["xaxis"]["range"] = [janela_ini, janela_fim]
-
-        if EIXO_DESLOC in eixos_usados:
-            layout_kwargs["yaxis"] = dict(
-                title=dict(text="Deslocamento vertical", font=dict(color=CORES[EIXO_DESLOC])),
-                tickfont=dict(color=CORES[EIXO_DESLOC]),
-            )
-        if EIXO_ACEL in eixos_usados:
-            layout_kwargs["yaxis2"] = dict(
-                title=dict(text="Aceleração", font=dict(color=CORES[EIXO_ACEL])),
-                tickfont=dict(color=CORES[EIXO_ACEL]),
-                overlaying="y", side="right",
-            )
-        if EIXO_GYRO in eixos_usados:
-            layout_kwargs["yaxis3"] = dict(
-                title=dict(text="Giroscópio", font=dict(color=CORES[EIXO_GYRO])),
-                tickfont=dict(color=CORES[EIXO_GYRO]),
-                overlaying="y", side="right", position=0.94,
-                anchor="free",
-            )
-        if EIXO_ANGULO in eixos_usados:
-            layout_kwargs["yaxis4"] = dict(
-                title=dict(text="Ângulo (°)", font=dict(color=CORES[EIXO_ANGULO])),
-                tickfont=dict(color=CORES[EIXO_ANGULO]),
-                overlaying="y", side="right", position=0.88,
-                anchor="free",
-            )
-
-        fig.update_layout(**layout_kwargs)
-
-        if "pico_referencia" in st.session_state:
-            fig.add_vline(
-                x=st.session_state.pico_referencia,
-                line_dash="dash",
-                line_color="gray",
-                annotation_text="pico de referência",
-                annotation_position="top",
-            )
-
-        st.plotly_chart(fig, use_container_width=True)
 
 # --- Ângulo de flexão do cotovelo: trials, ADM e erro vs trial 1 ---
 st.header("🦾 Flexão do cotovelo — trials, ADM e erro")
